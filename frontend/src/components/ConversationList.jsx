@@ -43,32 +43,34 @@ export default function ConversationList({ sessions, activeId, onSelect }) {
   return (
     <div className="flex flex-col h-full">
       {/* Search + filters */}
-      <div className="px-4 pt-3 pb-2 border-b border-hair space-y-2.5">
+      <div className="px-4 pb-3 space-y-3">
         <div className="relative">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#A99F92" strokeWidth="2"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2">
+            className="absolute left-3 top-1/2 -translate-y-1/2">
             <circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" strokeLinecap="round" />
           </svg>
           <input
-            value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by phone…"
-            className="w-full text-[12.5px] pl-8 pr-2.5 py-1.5 rounded-lg bg-canvas border border-hair focus:outline-none focus:border-brand"
+            value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers…"
+            className="w-full text-[13px] pl-9 pr-3 py-2 rounded-lg bg-canvas border border-transparent focus:bg-surface focus:border-hair focus:outline-none transition-colors"
           />
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-4 px-1">
           {FILTERS.map((f) => (
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`flex-1 text-[11px] font-medium py-1 rounded-md transition-colors ${
-                filter === f.key ? "accent-bg text-white" : "bg-canvas text-muted hover:text-ink"
+              className={`relative text-[12px] font-medium pb-1.5 transition-colors ${
+                filter === f.key ? "accent-text" : "text-faint hover:text-muted"
               }`}
             >
               {f.label}
-              <span className={`ml-1 ${filter === f.key ? "text-white/80" : "text-faint"}`}>{counts[f.key] ?? 0}</span>
+              <span className="ml-1 text-[10.5px] opacity-70">{counts[f.key] ?? 0}</span>
+              {filter === f.key && <span className="absolute left-0 right-0 -bottom-px h-0.5 rounded-full accent-bg" />}
             </button>
           ))}
         </div>
       </div>
+      <div className="h-px bg-hair" />
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">

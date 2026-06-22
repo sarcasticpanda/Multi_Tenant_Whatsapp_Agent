@@ -54,7 +54,7 @@ export default function BroadcastDrawer({ open, onClose, tenantId, tenants = [],
         onClick={onClose}
       />
       <div
-        className={`absolute right-0 top-0 h-full w-full max-w-[420px] bg-surface shadow-lift flex flex-col transition-transform duration-300 ${
+        className={`absolute right-0 top-0 h-full w-full max-w-[420px] bg-surface shadow-lift flex flex-col transition-transform duration-[400ms] ease-[cubic-bezier(0.32,0.72,0,1)] ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >

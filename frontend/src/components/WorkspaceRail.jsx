@@ -1,4 +1,4 @@
-export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogout }) {
+export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogout, listOpen, onToggleList }) {
   return (
     <nav className="w-[64px] shrink-0 bg-rail flex flex-col items-center py-4 gap-2">
       {/* Brand mark — concentric "orchestrator" node */}
@@ -12,7 +12,14 @@ export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogou
         </svg>
       </div>
 
-      <div className="w-7 h-px bg-white/10 mb-1" />
+      {/* Collapse / expand the conversation panel */}
+      {view === "console" && (
+        <RailButton onClick={onToggleList} title={listOpen ? "Hide list" : "Show list"}>
+          <path d="M3 6h18M3 12h18M3 18h18" strokeLinecap="round" strokeLinejoin="round" />
+        </RailButton>
+      )}
+
+      <div className="w-7 h-px bg-white/10 my-1" />
 
       <div className="flex-1" />
 

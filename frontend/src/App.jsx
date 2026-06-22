@@ -6,7 +6,6 @@ import TenantSwitcher from "./components/TenantSwitcher";
 import ConversationList from "./components/ConversationList";
 import ChatThread from "./components/ChatThread";
 import BroadcastDrawer from "./components/BroadcastDrawer";
-import StatStrip from "./components/StatStrip";
 import AdminPanel from "./components/AdminPanel";
 import Login from "./components/Login";
 
@@ -22,9 +21,9 @@ function Console({ onLogout }) {
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [stats, setStats] = useState(null);
   const [broadcastOpen, setBroadcastOpen] = useState(false);
   const [view, setView] = useState("console"); // "console" | "admin"
+  const [listOpen, setListOpen] = useState(true);
 
   const theme = themeFor(activeTenant);
 
@@ -45,7 +44,6 @@ function Console({ onLogout }) {
   const loadSessions = useCallback(() => {
     if (!activeTenant || document.hidden) return;
     api.getSessions(activeTenant).then((d) => setSessions(d.sessions)).catch(console.error);
-    api.getStats(activeTenant).then(setStats).catch(() => {});
   }, [activeTenant]);
 
   useEffect(() => {
@@ -90,6 +88,8 @@ function Console({ onLogout }) {
         view={view}
         onViewChange={setView}
         onLogout={onLogout}
+        listOpen={listOpen}
+        onToggleList={() => setListOpen((v) => !v)}
       />
 
       {view === "admin" ? (
@@ -102,16 +102,14 @@ function Console({ onLogout }) {
         />
       ) : (
         <>
-          {/* Middle: switcher + stats + conversation list */}
-          <section className="w-[370px] shrink-0 flex flex-col border-r border-hair bg-surface">
-            <header className="px-4 pt-4 pb-3 border-b border-hair">
+          {/* Middle: switcher + conversation list (collapsible) */}
+          <section className={`shrink-0 flex flex-col border-r border-hair bg-surface overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${listOpen ? "w-[360px]" : "w-0 border-r-0"}`}>
+            <header className="px-4 pt-4 pb-4">
               <TenantSwitcher tenants={tenants} activeTenant={activeTenant} onSelect={setActiveTenant} />
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-faint mt-3 px-1">
+              <div className="flex items-center gap-1.5 text-[11.5px] text-muted mt-3 px-1">
                 <span className="w-1.5 h-1.5 rounded-full accent-bg animate-pulsedot" />
-                <span className="uppercase tracking-[0.12em]">Live</span>
-                <span className="text-muted normal-case tracking-normal">· {theme.persona}</span>
+                <span>Live · {theme.persona}</span>
               </div>
-              <StatStrip stats={stats} />
             </header>
 
             <div className="flex-1 overflow-y-auto">
