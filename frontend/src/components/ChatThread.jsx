@@ -69,6 +69,13 @@ export default function ChatThread({ session, messages }) {
   const st = STATUS[session.status] || STATUS.WAITING_FOR_BOT;
   const needsHuman = session.status === "NEEDS_HUMAN";
 
+  // Per-customer analytics derived from the thread
+  const inbound = messages.filter((m) => m.direction === "INBOUND").length;
+  const outbound = messages.filter((m) => m.direction === "OUTBOUND").length;
+  const mediaSent = messages.filter((m) => m.direction === "OUTBOUND" && m.media_url).length;
+  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString([], { day: "numeric", month: "short" }) : "—");
+  const firstSeen = messages.length ? fmtDate(messages[0].timestamp) : "—";
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Thread header */}
@@ -89,6 +96,17 @@ export default function ChatThread({ session, messages }) {
             Human needed
           </span>
         )}
+      </div>
+
+      {/* Per-customer analytics strip */}
+      <div className="bg-surface border-b border-hair px-5 py-2 flex items-center gap-5 text-[11.5px] shrink-0">
+        <span className="text-muted">Customer received <b className="text-ink font-mono">{mediaSent}</b> file{mediaSent === 1 ? "" : "s"}</span>
+        <span className="text-muted"><b className="text-ink font-mono">{inbound}</b> sent · <b className="text-ink font-mono">{outbound}</b> bot</span>
+        <span className="text-muted">First seen <b className="text-ink">{firstSeen}</b></span>
+        <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium"
+          style={{ backgroundColor: st.bg, color: st.text }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: st.dot }} />{st.label}
+        </span>
       </div>
 
       {/* Escalation banner */}

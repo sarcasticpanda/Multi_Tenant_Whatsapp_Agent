@@ -1,49 +1,18 @@
-import { themeFor } from "../tenants";
-
-export default function WorkspaceRail({ tenants, activeTenant, onSelect, onBroadcast, view, onViewChange, onLogout }) {
+export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogout }) {
   return (
-    <nav className="w-[68px] shrink-0 bg-rail flex flex-col items-center py-4 gap-2">
-      {/* Brand mark */}
-      <div className="w-10 h-10 rounded-xl bg-brand flex items-center justify-center mb-2 shadow-lift">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2a10 10 0 00-8.7 14.9L2 22l5.3-1.4A10 10 0 1012 2z" stroke="#fff" strokeWidth="1.6" fill="none"/>
-          <circle cx="9" cy="12" r="1.3" fill="#fff"/>
-          <circle cx="12" cy="12" r="1.3" fill="#fff"/>
-          <circle cx="15" cy="12" r="1.3" fill="#fff"/>
+    <nav className="w-[64px] shrink-0 bg-rail flex flex-col items-center py-4 gap-2">
+      {/* Brand mark — concentric "orchestrator" node */}
+      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand to-brand-deep flex items-center justify-center mb-2 shadow-lift">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="1.5" opacity="0.35" />
+          <circle cx="12" cy="12" r="4.5" fill="#fff" />
+          <circle cx="20" cy="6" r="2" fill="#fff" />
+          <circle cx="5" cy="18" r="2" fill="#fff" />
+          <path d="M12 12l7-5M12 12l-6 5" stroke="#fff" strokeWidth="1.3" opacity="0.6" />
         </svg>
       </div>
 
       <div className="w-7 h-px bg-white/10 mb-1" />
-
-      {/* Tenant workspaces */}
-      {tenants.map((t) => {
-        const th = themeFor(t.tenant_id);
-        const active = activeTenant === t.tenant_id;
-        return (
-          <button
-            key={t.tenant_id}
-            onClick={() => onSelect(t.tenant_id)}
-            title={t.name}
-            className="group relative flex items-center justify-center"
-          >
-            {/* active indicator bar */}
-            <span
-              className={`absolute -left-4 w-1 rounded-r-full transition-all ${active ? "h-7" : "h-0 group-hover:h-3"}`}
-              style={{ backgroundColor: th.accent }}
-            />
-            <span
-              className={`w-11 h-11 rounded-xl font-display font-semibold text-[17px] flex items-center justify-center transition-all ${
-                active ? "text-white shadow-lift scale-105" : "text-white/70 hover:text-white"
-              }`}
-              style={{
-                backgroundColor: active ? th.accent : "rgba(255,255,255,0.08)",
-              }}
-            >
-              {th.initial}
-            </span>
-          </button>
-        );
-      })}
 
       <div className="flex-1" />
 

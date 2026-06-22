@@ -13,24 +13,34 @@ function fmtPhone(p) {
   return s.length >= 12 ? `+${s.slice(0, 2)} ${s.slice(2, 7)} ${s.slice(7)}` : s;
 }
 
-export default function BroadcastDrawer({ open, onClose, tenantId, sessions }) {
+export default function BroadcastDrawer({ open, onClose, tenantId, tenants = [], sessions }) {
   const [selected, setSelected] = useState([]);
   const [template, setTemplate] = useState(TEMPLATES[0].text);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
+  const [targetTenant, setTargetTenant] = useState(tenantId);
+  const [targetSessions, setTargetSessions] = useState(sessions);
 
   useEffect(() => {
-    if (open) { setResult(null); }
+    if (open) { setResult(null); setTargetTenant(tenantId); }
   }, [open, tenantId]);
 
-  const phones = [...new Set(sessions.map((s) => s.customer_phone))];
+  // Load recipients for whichever tenant is targeted (may differ from the console's active tenant)
+  useEffect(() => {
+    if (!open || !targetTenant) return;
+    if (targetTenant === tenantId) { setTargetSessions(sessions); return; }
+    api.getSessions(targetTenant).then((d) => setTargetSessions(d.sessions)).catch(() => setTargetSessions([]));
+    setSelected([]);
+  }, [open, targetTenant, tenantId, sessions]);
+
+  const phones = [...new Set((targetSessions || []).map((s) => s.customer_phone))];
   const toggle = (p) => setSelected((x) => (x.includes(p) ? x.filter((y) => y !== p) : [...x, p]));
 
   const send = async () => {
     if (!selected.length) return;
     setSending(true); setResult(null);
     try {
-      const r = await api.broadcast({ tenant_id: tenantId, phone_numbers: selected, message: template });
+      const r = await api.broadcast({ tenant_id: targetTenant, phone_numbers: selected, message: template });
       setResult({ ok: true, sent: r.sent?.length || 0, failed: r.failed?.length || 0 });
     } catch (e) {
       setResult({ ok: false, error: e.message });
@@ -59,6 +69,20 @@ export default function BroadcastDrawer({ open, onClose, tenantId, sessions }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <div>
+            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Tenant</label>
+            <select
+              value={targetTenant || ""}
+              onChange={(e) => setTargetTenant(e.target.value)}
+              className="w-full mt-1.5 text-[13px] border border-hair rounded-lg px-2.5 py-2 bg-surface focus:outline-none focus:border-brand"
+            >
+              {tenants.map((t) => (
+                <option key={t.tenant_id} value={t.tenant_id}>{t.name}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-faint mt-1">Broadcast goes to this brand's customers.</p>
+          </div>
+
           <div>
             <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Template</label>
             <div className="grid grid-cols-2 gap-2 mt-2">

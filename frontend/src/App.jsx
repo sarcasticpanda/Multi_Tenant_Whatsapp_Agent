@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api, isLoggedIn, logout } from "./api/client";
 import { themeFor } from "./tenants";
 import WorkspaceRail from "./components/WorkspaceRail";
+import TenantSwitcher from "./components/TenantSwitcher";
 import ConversationList from "./components/ConversationList";
 import ChatThread from "./components/ChatThread";
 import BroadcastDrawer from "./components/BroadcastDrawer";
@@ -101,23 +102,18 @@ function Console({ onLogout }) {
         />
       ) : (
         <>
-          {/* Middle: header + stats + conversation list */}
-          <section className="w-[360px] shrink-0 flex flex-col border-r border-hair bg-surface">
-            <header className="px-5 pt-5 pb-4 border-b border-hair">
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-faint uppercase tracking-[0.14em]">
+          {/* Middle: switcher + stats + conversation list */}
+          <section className="w-[370px] shrink-0 flex flex-col border-r border-hair bg-surface">
+            <header className="px-4 pt-4 pb-3 border-b border-hair">
+              <TenantSwitcher tenants={tenants} activeTenant={activeTenant} onSelect={setActiveTenant} />
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-faint mt-3 px-1">
                 <span className="w-1.5 h-1.5 rounded-full accent-bg animate-pulsedot" />
-                Live console
+                <span className="uppercase tracking-[0.12em]">Live</span>
+                <span className="text-muted normal-case tracking-normal">· {theme.persona}</span>
               </div>
-              <h1 className="font-display text-[22px] font-semibold leading-tight mt-1.5">
-                {activeTenantObj?.name || "—"}
-              </h1>
-              <p className="text-[13px] text-muted mt-0.5">{theme.persona}</p>
               <StatStrip stats={stats} />
             </header>
 
-            <div className="px-5 py-2.5 text-[11px] font-semibold text-faint uppercase tracking-[0.12em] border-b border-hair">
-              Conversations
-            </div>
             <div className="flex-1 overflow-y-auto">
               <ConversationList
                 sessions={sessions}
@@ -138,6 +134,7 @@ function Console({ onLogout }) {
         open={broadcastOpen}
         onClose={() => setBroadcastOpen(false)}
         tenantId={activeTenant}
+        tenants={tenants}
         sessions={sessions}
       />
     </div>
