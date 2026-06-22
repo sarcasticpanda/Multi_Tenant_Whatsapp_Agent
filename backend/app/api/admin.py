@@ -155,7 +155,18 @@ async def admin_add_media(
     await db.tenants.update_one(
         {"tenant_id": tenant_id}, {"$set": {f"media_library.{keyword.lower()}": url}}
     )
-    return {"ok": True, "keyword": keyword.lower(), "url": url}
+
+    # If it's a PDF, also read its TEXT into knowledge so the bot can not only SEND it
+    # but also ANSWER questions about its contents (document RAG) — one upload, both.
+    knowledge_chunks = 0
+    ctype = (file.content_type or "").lower()
+    fname = (file.filename or "").lower()
+    if "pdf" in ctype or fname.endswith(".pdf"):
+        from app.rag.pdf_extractor import ingest_text_pdf
+        summary = await ingest_text_pdf(tenant_id, data, file.filename)
+        knowledge_chunks = summary.get("text_chunks", 0)
+
+    return {"ok": True, "keyword": keyword.lower(), "url": url, "knowledge_chunks": knowledge_chunks}
 
 
 @router.delete("/tenants/{tenant_id}/media/{keyword}")
