@@ -70,6 +70,7 @@ export const api = {
   getStats: (id) => get(`/api/tenants/${id}/stats`),
   setSessionStatus: (sid, status) => send(`/api/sessions/${sid}/status`, "POST", { status }),
   replySession: (sid, text) => send(`/api/sessions/${sid}/reply`, "POST", { text }),
+  deleteSession: (sid) => send(`/api/sessions/${sid}`, "DELETE"),
   broadcast: (p) => send("/api/broadcast", "POST", p),
 
   // admin — customer routing (phone -> tenant)

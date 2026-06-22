@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { STATUS } from "../tenants";
+import { STATUS, STATUS_FILTERS } from "../tenants";
 
 function timeAgo(iso) {
   if (!iso) return "";
@@ -18,10 +18,14 @@ function fmtPhone(p) {
 
 const FILTERS = [
   { key: "all", label: "All" },
-  { key: "AGENT_RESPONDING", label: "Active" },
+  { key: "active", label: "Active" },
   { key: "RESOLVED", label: "Resolved" },
   { key: "NEEDS_HUMAN", label: "Escalated" },
 ];
+
+// A session matches a filter if its status is in that filter's status list.
+const inFilter = (status, key) =>
+  key === "all" || (STATUS_FILTERS[key] || [key]).includes(status);
 
 export default function ConversationList({ sessions, activeId, onSelect }) {
   const [filter, setFilter] = useState("all");
@@ -29,13 +33,13 @@ export default function ConversationList({ sessions, activeId, onSelect }) {
 
   const counts = {
     all: sessions.length,
-    AGENT_RESPONDING: sessions.filter((s) => s.status === "AGENT_RESPONDING").length,
-    RESOLVED: sessions.filter((s) => s.status === "RESOLVED").length,
-    NEEDS_HUMAN: sessions.filter((s) => s.status === "NEEDS_HUMAN").length,
+    active: sessions.filter((s) => inFilter(s.status, "active")).length,
+    RESOLVED: sessions.filter((s) => inFilter(s.status, "RESOLVED")).length,
+    NEEDS_HUMAN: sessions.filter((s) => inFilter(s.status, "NEEDS_HUMAN")).length,
   };
 
   const visible = sessions.filter((s) => {
-    const okFilter = filter === "all" || s.status === filter;
+    const okFilter = inFilter(s.status, filter);
     const okSearch = !q || String(s.customer_phone).includes(q.replace(/\D/g, ""));
     return okFilter && okSearch;
   });

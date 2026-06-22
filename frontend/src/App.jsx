@@ -68,11 +68,12 @@ function Console({ onLogout }) {
     setMessages([]);
   }, [activeTenant]);
 
-  // keep active session status fresh
+  // keep active session fresh; clear it if it was deleted
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession || sessions.length === 0) return;
     const fresh = sessions.find((s) => s.session_id === activeSession.session_id);
-    if (fresh && fresh.status !== activeSession.status) setActiveSession(fresh);
+    if (!fresh) { setActiveSession(null); setMessages([]); }
+    else if (fresh.status !== activeSession.status) setActiveSession(fresh);
   }, [sessions, activeSession]);
 
   const activeTenantObj = tenants.find((t) => t.tenant_id === activeTenant);

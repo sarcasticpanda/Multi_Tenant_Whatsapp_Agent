@@ -70,6 +70,13 @@ export default function ChatThread({ session, messages, onChanged }) {
     finally { setSending(false); }
   };
 
+  const deleteChat = async () => {
+    if (!session) return;
+    if (!window.confirm("Delete this conversation and its history? This lets you re-test from scratch and can't be undone.")) return;
+    try { await api.deleteSession(session.session_id); onChanged?.(); }
+    catch (e) { console.error(e); }
+  };
+
   if (!session) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center chat-canvas">
@@ -86,6 +93,7 @@ export default function ChatThread({ session, messages, onChanged }) {
 
   const st = STATUS[session.status] || STATUS.WAITING_FOR_BOT;
   const needsHuman = session.status === "NEEDS_HUMAN";
+  const resolved = session.status === "RESOLVED";
 
   // Per-customer analytics derived from the thread
   const inbound = messages.filter((m) => m.direction === "INBOUND").length;
@@ -108,33 +116,43 @@ export default function ChatThread({ session, messages, onChanged }) {
             {st.label}
           </div>
         </div>
-        {/* Status actions */}
+        {/* Status actions — depend on the current state */}
         <div className="flex items-center gap-2">
           {needsHuman ? (
             <>
-              <button onClick={() => changeStatus("WAITING_FOR_BOT")}
+              <button onClick={() => changeStatus("WAITING_FOR_BOT")} title="Hand back to the bot"
                 className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
                 ↻ Resume bot
               </button>
-              <button onClick={() => changeStatus("RESOLVED")}
+              <button onClick={() => changeStatus("RESOLVED")} title="Close this conversation"
                 className="bg-white text-brand-deep text-[11px] font-semibold px-2.5 py-1 rounded-full">
                 ✓ Resolve
               </button>
             </>
+          ) : resolved ? (
+            <button onClick={() => changeStatus("WAITING_FOR_BOT")} title="Reopen — bot resumes"
+              className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
+              ↻ Reopen
+            </button>
           ) : (
             <>
-              <button onClick={() => changeStatus("NEEDS_HUMAN")}
+              <button onClick={() => changeStatus("NEEDS_HUMAN")} title="Pause the bot and handle it yourself"
                 className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
                 Take over
               </button>
-              {session.status !== "RESOLVED" && (
-                <button onClick={() => changeStatus("RESOLVED")}
-                  className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
-                  ✓ Resolve
-                </button>
-              )}
+              <button onClick={() => changeStatus("RESOLVED")} title="Close this conversation"
+                className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
+                ✓ Resolve
+              </button>
             </>
           )}
+          {/* Delete — clears the conversation so you can re-test from scratch */}
+          <button onClick={deleteChat} title="Delete conversation (reset for re-testing)"
+            className="text-white/50 hover:text-white ml-0.5 p-1 rounded-full transition-colors">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
         </div>
       </div>
 

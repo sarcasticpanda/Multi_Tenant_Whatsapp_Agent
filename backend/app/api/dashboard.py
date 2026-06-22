@@ -88,6 +88,23 @@ async def set_session_status(session_id: str, body: StatusUpdate):
     return {"ok": True, "status": body.status}
 
 
+@router.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """
+    Delete a conversation: its session, message history, and any explicit routing
+    for that customer. This fully resets the customer so the next message they send
+    runs the fresh triage flow — handy for re-recording a demo with the same number.
+    """
+    db = get_db()
+    session = await db.chat_sessions.find_one({"session_id": session_id})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await db.message_audit_log.delete_many({"session_id": session_id})
+    await db.chat_sessions.delete_one({"session_id": session_id})
+    await db.customer_routing.delete_one({"customer_phone": session["customer_phone"]})
+    return {"ok": True}
+
+
 class ReplyIn(BaseModel):
     text: str
 

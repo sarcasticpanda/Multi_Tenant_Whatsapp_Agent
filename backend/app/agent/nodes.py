@@ -479,8 +479,10 @@ async def dispatcher_node(state: AgentState) -> AgentState:
         except Exception as e:
             logger.error(f"Failed to send media: {e}")
 
-    # Determine final status
-    new_status = state["session_status"] if state["session_status"] == "NEEDS_HUMAN" else "RESOLVED"
+    # Determine final status. After a normal reply the bot stays ON DUTY
+    # (WAITING_FOR_BOT) — it is NOT "resolved". RESOLVED is a human action only.
+    # If the turn escalated, keep NEEDS_HUMAN so auto-replies stay paused.
+    new_status = "NEEDS_HUMAN" if state["session_status"] == "NEEDS_HUMAN" else "WAITING_FOR_BOT"
 
     # Save outbound message
     await db.message_audit_log.insert_one({
