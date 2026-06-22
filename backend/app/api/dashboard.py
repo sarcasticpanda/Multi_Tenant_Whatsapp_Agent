@@ -1,3 +1,6 @@
+from datetime import datetime
+from uuid import uuid4
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.db.mongodb import get_db
@@ -83,6 +86,48 @@ async def set_session_status(session_id: str, body: StatusUpdate):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True, "status": body.status}
+
+
+class ReplyIn(BaseModel):
+    text: str
+
+
+@router.post("/api/sessions/{session_id}/reply")
+async def reply_to_session(session_id: str, body: ReplyIn):
+    """
+    Let a human agent send a message to the customer from the dashboard — essential
+    when a chat is escalated (NEEDS_HUMAN) and the bot has stopped auto-replying.
+    Logged as an OUTBOUND message from the AGENT (not the bot).
+    """
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message text is required")
+    db = get_db()
+    session = await db.chat_sessions.find_one({"session_id": session_id})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tenant = await db.tenants.find_one({"tenant_id": session["tenant_id"]})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    await send_text_message(tenant["whatsapp_phone_number_id"], session["customer_phone"], text)
+
+    await db.message_audit_log.insert_one({
+        "message_id": str(uuid4()),
+        "session_id": session_id,
+        "tenant_id": session["tenant_id"],
+        "direction": "OUTBOUND",
+        "sender": "AGENT",
+        "text_content": text,
+        "media_url": None, "media_type": None, "media_filename": None,
+        "agent_state": "SENT",
+        "timestamp": datetime.utcnow(),
+    })
+    await db.chat_sessions.update_one(
+        {"session_id": session_id},
+        {"$set": {"last_message_at": datetime.utcnow()}, "$inc": {"message_count": 1}},
+    )
+    return {"ok": True}
 
 
 class BroadcastRequest(BaseModel):

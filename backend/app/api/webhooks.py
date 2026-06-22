@@ -185,9 +185,12 @@ async def _resolve_or_triage(db, customer_phone: str, phone_number_id: str, text
 
 async def _handle_switch_command(db, text: str, customer_phone: str, phone_number_id: str) -> bool:
     """
-    Optional convenience for demos: one customer phone can flip between tenants by
-    texting a '#code' command (e.g. '#furniture', '#autocare'). In production each
-    tenant has its own number, so this is purely a one-phone helper.
+    Lets a customer change which tenant they're talking to with an explicit command.
+    Proper, scalable format (no list of 50 tenants needed):
+      - '#autocare'                -> switch by code
+      - 'switch to AutoCare'       -> switch by name
+      - 'switch'                   -> show a short picker (capped) + how to choose
+    In production each tenant has its own number, so this is a shared-number helper.
 
     Returns True if the message was a switch command (handled here, skip the agent).
     """
@@ -195,33 +198,43 @@ async def _handle_switch_command(db, text: str, customer_phone: str, phone_numbe
 
     stripped = (text or "").strip()
     low = stripped.lower()
-    # Trigger on a '#code', or a plain word a real customer might use.
-    bare_triggers = {"switch", "switch tenant", "change business", "switch business", "other business"}
-    if not stripped.startswith("#") and low not in bare_triggers:
+
+    # Detect intent + extract the target. Only '#...' or a message starting with
+    # 'switch' counts — so normal sentences ('change my oil') never trigger.
+    if stripped.startswith("#"):
+        target = stripped[1:].strip().lower()
+    elif re.match(r"^switch\b", low):
+        target = re.sub(r"^switch(\s+to)?(\s+(?:a\s+)?(?:business|tenant|brand))?", "", low).strip()
+    else:
         return False
 
-    code = stripped[1:].strip().lower() if stripped.startswith("#") else ""
     tenants = await db.tenants.find({"is_active": True}).to_list(None)
 
-    # '#switch' / 'switch' / '#help' / unknown -> list the available businesses
     def _code_of(t):
         return (t.get("switch_code") or t["tenant_id"]).lower()
 
-    if not code or code in ("switch", "help", "tenants"):
+    # No target -> show a capped picker with the exact format to use.
+    if not target or target in ("help", "tenants", "business", "list"):
         shown = tenants[:6]
         opts = "\n".join(f"• {t['name']} — reply *#{_code_of(t)}*" for t in shown)
-        more = "" if len(tenants) <= 6 else f"\n…and {len(tenants) - 6} more — reply with a business name."
+        more = "" if len(tenants) <= 6 else f"\n…and {len(tenants) - 6} more."
         await send_text_message(phone_number_id, customer_phone,
-            f"Which business would you like to chat with?\n{opts}{more}")
+            f"Which business would you like to chat with?\n{opts}{more}\n\nReply with its *#code*, or type *switch to <name>*.")
         return True
 
-    match = next((t for t in tenants if _code_of(t) == code
-                  or t["tenant_id"].lower() == code
-                  or code in t["name"].lower()), None)
-    if not match:
+    def _matches(t):
+        name = t["name"].lower()
+        words = set(re.split(r"[\s/_\-]+", name))
+        return (_code_of(t) == target or t["tenant_id"].lower() == target
+                or target in name or target in words)
+
+    matches = [t for t in tenants if _matches(t)]
+    if len(matches) != 1:
+        hint = "I couldn't tell which business you meant" if len(matches) > 1 else f"I don't recognise “{target}”"
         await send_text_message(phone_number_id, customer_phone,
-            f"Sorry, I don't recognise '#{code}'. Text *#switch* to see the options.")
+            f"{hint}. Type *switch* to see the options.")
         return True
+    match = matches[0]
 
     await db.customer_routing.update_one(
         {"customer_phone": customer_phone},

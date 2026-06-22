@@ -1,8 +1,12 @@
 export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogout, listOpen, onToggleList }) {
   return (
     <nav className="w-[64px] shrink-0 bg-rail flex flex-col items-center py-4 gap-2">
-      {/* Brand mark — concentric "orchestrator" node */}
-      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand to-brand-deep flex items-center justify-center mb-2 shadow-lift">
+      {/* Brand mark — concentric "orchestrator" node. Click = back to live console (home). */}
+      <button
+        onClick={() => onViewChange("console")}
+        title="Home — live console"
+        className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand to-brand-deep flex items-center justify-center mb-2 shadow-lift transition-transform hover:scale-105 active:scale-95"
+      >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="1.5" opacity="0.35" />
           <circle cx="12" cy="12" r="4.5" fill="#fff" />
@@ -10,7 +14,7 @@ export default function WorkspaceRail({ onBroadcast, view, onViewChange, onLogou
           <circle cx="5" cy="18" r="2" fill="#fff" />
           <path d="M12 12l7-5M12 12l-6 5" stroke="#fff" strokeWidth="1.3" opacity="0.6" />
         </svg>
-      </div>
+      </button>
 
       {/* Collapse / expand the conversation panel */}
       {view === "console" && (

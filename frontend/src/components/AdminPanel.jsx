@@ -217,8 +217,13 @@ function TenantWorkspace({ tenant, onBack }) {
     Promise.all([
       api.catalog(tenant.tenant_id).then((d) => d.items.length).catch(() => 0),
       api.knowledge(tenant.tenant_id).then((d) => d.docs.length).catch(() => 0),
-    ]).then(([Catalog, Knowledge]) =>
-      setCounts({ Catalog, Knowledge, Media: Object.keys(tenant.media_library || {}).length })
+      // media_library isn't in the minimal tenant list — read it from full admin data
+      api.adminTenants().then((d) => {
+        const full = d.tenants.find((t) => t.tenant_id === tenant.tenant_id);
+        return Object.keys(full?.media_library || {}).length;
+      }).catch(() => 0),
+    ]).then(([Catalog, Knowledge, Media]) =>
+      setCounts({ Catalog, Knowledge, Media })
     );
   }, [tenant]);
   useEffect(() => { refreshCounts(); }, [refreshCounts, tab]);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { STATUS } from "../tenants";
 import { displayUrl, api } from "../api/client";
 
@@ -50,12 +50,24 @@ function Media({ msg }) {
 
 export default function ChatThread({ session, messages, onChanged }) {
   const endRef = useRef(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, session]);
+  useEffect(() => { setDraft(""); }, [session?.session_id]);
 
   const changeStatus = async (status) => {
     if (!session) return;
     try { await api.setSessionStatus(session.session_id, status); onChanged?.(); }
     catch (e) { console.error(e); }
+  };
+
+  const sendReply = async () => {
+    const text = draft.trim();
+    if (!text || !session || sending) return;
+    setSending(true);
+    try { await api.replySession(session.session_id, text); setDraft(""); onChanged?.(); }
+    catch (e) { console.error(e); }
+    finally { setSending(false); }
   };
 
   if (!session) {
@@ -189,6 +201,35 @@ export default function ChatThread({ session, messages, onChanged }) {
           </div>
         )}
         <div ref={endRef} />
+      </div>
+
+      {/* Composer — human agent can reply to the customer (essential when escalated) */}
+      <div className="bg-surface border-t border-hair px-4 py-3 shrink-0">
+        <div className={`text-[11px] mb-1.5 ${needsHuman ? "text-alert" : "text-faint"}`}>
+          {needsHuman
+            ? "Auto-replies are paused — your message goes straight to the customer."
+            : "Send a manual message. The bot still handles the customer's next message."}
+        </div>
+        <div className="flex items-end gap-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+            rows={1}
+            placeholder="Type a reply…"
+            className="flex-1 resize-none text-[13.5px] border border-hair rounded-xl px-3.5 py-2.5 max-h-32 focus:outline-none focus:border-brand"
+          />
+          <button
+            onClick={sendReply}
+            disabled={sending || !draft.trim()}
+            className="shrink-0 w-10 h-10 rounded-full bg-chat-header text-white flex items-center justify-center disabled:opacity-40 transition-opacity"
+            title="Send"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   );
