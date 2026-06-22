@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -34,6 +35,24 @@ def _get_gemini():
         except Exception as e:
             logger.warning(f"Gemini client unavailable: {e}")
     return _gemini_client
+
+
+async def _groq_create(groq, **kwargs):
+    """Groq chat completion with retry/backoff on transient rate limits (free tier = 30/min)."""
+    last = None
+    for attempt in range(3):
+        try:
+            return groq.chat.completions.create(**kwargs)
+        except Exception as e:
+            last = e
+            m = str(e).lower()
+            if any(w in m for w in ("rate", "429", "limit", "timeout", "temporar")):
+                wait = 3 * (attempt + 1)
+                logger.warning(f"Groq throttled (attempt {attempt+1}), retrying in {wait}s")
+                await asyncio.sleep(wait)
+                continue
+            raise
+    raise last
 
 
 def _get_groq():
@@ -264,7 +283,8 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         return state
 
     try:
-        resp = groq.chat.completions.create(
+        resp = await _groq_create(
+            groq,
             model=settings.groq_model,
             messages=messages,
             tools=_groq_tools,
@@ -273,8 +293,8 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
             max_tokens=500,
         )
     except Exception as e:
-        logger.error(f"Groq call failed: {e}")
-        state["llm_reply"] = "I'm experiencing a brief outage. Please try again in a moment."
+        logger.error(f"Groq call failed after retries: {e}")
+        state["llm_reply"] = "Give me just a moment — could you send that again? 😊"
         return state
 
     msg = resp.choices[0].message
@@ -367,8 +387,8 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
 
         # Second call: let the model write the natural reply using tool results
         try:
-            resp2 = groq.chat.completions.create(
-                model=settings.groq_model, messages=messages, temperature=0.5, max_tokens=400,
+            resp2 = await _groq_create(
+                groq, model=settings.groq_model, messages=messages, temperature=0.5, max_tokens=400,
             )
             final_reply = resp2.choices[0].message.content or final_reply
         except Exception as e:
