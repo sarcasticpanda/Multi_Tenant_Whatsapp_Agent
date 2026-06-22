@@ -47,6 +47,15 @@ export default function Login({ onSuccess }) {
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
+
+        {/* Demo convenience: prefill the reviewer password in one tap */}
+        <button
+          type="button"
+          onClick={() => setPassword("kredai_admin")}
+          className="w-full mt-3 text-[12px] text-muted hover:text-ink transition-colors"
+        >
+          Reviewer demo? Password: <span className="font-mono text-ink">kredai_admin</span> — tap to fill
+        </button>
       </form>
     </div>
   );
