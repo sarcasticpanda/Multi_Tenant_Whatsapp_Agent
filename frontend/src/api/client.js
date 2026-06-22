@@ -1,30 +1,111 @@
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+// Stored media URLs use the public (ngrok) host so WhatsApp can fetch them.
+// But <img> tags can't send the ngrok-skip header, so for in-dashboard display
+// we rewrite the origin to our API base (localhost), which serves the same file.
+export function displayUrl(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    return BASE.replace(/\/$/, "") + u.pathname + u.search;
+  } catch {
+    return url;
+  }
+}
+
+function headers(extra = {}) {
+  const h = { "ngrok-skip-browser-warning": "true", ...extra };
+  const token = localStorage.getItem("admin_token");
+  if (token) h["Authorization"] = `Bearer ${token}`;
+  return h;
+}
+
 async function get(path) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "ngrok-skip-browser-warning": "true" },
-  });
+  const res = await fetch(`${BASE}${path}`, { headers: headers() });
   if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
   return res.json();
 }
 
-async function post(path, body) {
+async function send(path, method, body) {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "ngrok-skip-browser-warning": "true",
-    },
+    method,
+    headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  if (!res.ok) throw new Error((await res.text()) || `${method} ${path} failed`);
   return res.json();
 }
 
+async function upload(path, formData) {
+  const res = await fetch(`${BASE}${path}`, { method: "POST", headers: headers(), body: formData });
+  if (!res.ok) throw new Error((await res.text()) || `Upload failed`);
+  return res.json();
+}
+
+export async function login(password) {
+  const res = await fetch(`${BASE}/api/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw new Error("Incorrect password");
+  const { token } = await res.json();
+  localStorage.setItem("admin_token", token);
+  return token;
+}
+
+export function logout() {
+  localStorage.removeItem("admin_token");
+}
+
+export function isLoggedIn() {
+  return !!localStorage.getItem("admin_token");
+}
+
 export const api = {
+  // monitoring
   getTenants: () => get("/api/tenants"),
-  getSessions: (tenantId) => get(`/api/tenants/${tenantId}/sessions`),
-  getMessages: (sessionId) => get(`/api/sessions/${sessionId}/messages`),
-  getStats: (tenantId) => get(`/api/tenants/${tenantId}/stats`),
-  broadcast: (payload) => post("/api/broadcast", payload),
+  getSessions: (id) => get(`/api/tenants/${id}/sessions`),
+  getMessages: (sid) => get(`/api/sessions/${sid}/messages`),
+  getStats: (id) => get(`/api/tenants/${id}/stats`),
+  broadcast: (p) => send("/api/broadcast", "POST", p),
+
+  // admin — tenants
+  adminTenants: () => get("/api/admin/tenants"),
+  createTenant: (p) => send("/api/admin/tenants", "POST", p),
+  updateTenant: (id, p) => send(`/api/admin/tenants/${id}`, "PUT", p),
+  deleteTenant: (id) => send(`/api/admin/tenants/${id}`, "DELETE"),
+
+  // admin — media library
+  addMedia: (id, keyword, file) => {
+    const fd = new FormData();
+    fd.append("keyword", keyword);
+    fd.append("file", file);
+    return upload(`/api/admin/tenants/${id}/media`, fd);
+  },
+  removeMedia: (id, keyword) => send(`/api/admin/tenants/${id}/media/${encodeURIComponent(keyword)}`, "DELETE"),
+
+  // admin — catalog
+  catalog: (id) => get(`/api/admin/tenants/${id}/catalog`),
+  addCatalog: (id, { name, price, description, attributes, file }) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("price", price || "");
+    fd.append("description", description || "");
+    fd.append("attributes", attributes || "{}");
+    fd.append("auto_describe", !description);
+    fd.append("file", file);
+    return upload(`/api/admin/tenants/${id}/catalog`, fd);
+  },
+  deleteCatalog: (itemId) => send(`/api/admin/catalog/${itemId}`, "DELETE"),
+  ingestPdf: (id, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return upload(`/api/admin/tenants/${id}/catalog/from-pdf`, fd);
+  },
+
+  // admin — knowledge
+  knowledge: (id) => get(`/api/admin/tenants/${id}/knowledge`),
+  addKnowledge: (p) => send("/api/admin/knowledge", "POST", p),
+  deleteKnowledge: (docId) => send(`/api/admin/knowledge/${docId}`, "DELETE"),
 };

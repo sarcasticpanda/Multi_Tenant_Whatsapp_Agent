@@ -61,14 +61,24 @@ START → acknowledge → retrieve_context → llm_reason → dispatch → END
 |-------|--------|
 | Backend | FastAPI (Python 3.11) |
 | Agent orchestration | LangGraph |
-| Primary LLM | Google Gemini 2.0 Flash (free tier, tool calling + vision) |
-| Fallback LLM | Groq Llama 3.3 70B (used only if Gemini errors/rate-limits) |
+| Primary LLM | Groq Llama 3.3 70B (tool calling — generous free tier) |
+| Vision LLM | Google Gemini 2.0 Flash (inbound image + catalog auto-describe) |
 | Embeddings (RAG) | ChromaDB built-in ONNX `all-MiniLM-L6-v2` (no torch — light) |
 | App database | MongoDB Atlas (M0 free) |
+| File storage | MongoDB GridFS (uploads + inbound images survive restarts) |
 | Vector store | ChromaDB (in-memory, rebuilt from MongoDB at startup) |
 | Messaging | Meta WhatsApp Business Cloud API (Graph API v20.0) |
 | Frontend | React + Vite + Tailwind CSS |
 | Deployment | Render (backend) + Vercel (frontend) |
+
+## Beyond the assignment (extra features)
+
+- **Multimodal catalog** — products link an image to structured data (price, color, delivery), searchable by description ("show me a green leather sofa")
+- **PDF catalog ingestion** — upload one catalog PDF; PyMuPDF extracts every product image, stores it in GridFS, and makes it searchable
+- **Admin panel** — create/delete tenants, upload media (keyword→file), manage catalog & knowledge, edit bot personality — all rebuild the RAG index live
+- **Login gate** — password → signed token protects the admin routes
+- **GridFS storage** — uploaded & customer-sent images live in MongoDB (no disk needed)
+- **Reliability** — webhook idempotency (no duplicate replies), atomic session creation, Groq+Gemini split for quota resilience
 
 ---
 

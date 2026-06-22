@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # App
     app_base_url: str = "http://localhost:8000"
 
+    # Dashboard login (simple single-admin gate)
+    admin_password: str = "kredai_admin"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

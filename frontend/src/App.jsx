@@ -1,11 +1,21 @@
 import { useEffect, useState, useCallback } from "react";
-import { api } from "./api/client";
-import TenantSwitcher from "./components/TenantSwitcher";
-import ChatMonitor from "./components/ChatMonitor";
+import { api, isLoggedIn, logout } from "./api/client";
+import { themeFor } from "./tenants";
+import WorkspaceRail from "./components/WorkspaceRail";
+import ConversationList from "./components/ConversationList";
 import ChatThread from "./components/ChatThread";
 import BroadcastDrawer from "./components/BroadcastDrawer";
+import StatStrip from "./components/StatStrip";
+import AdminPanel from "./components/AdminPanel";
+import Login from "./components/Login";
 
 export default function App() {
+  const [authed, setAuthed] = useState(isLoggedIn());
+  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
+  return <Console onLogout={() => { logout(); setAuthed(false); }} />;
+}
+
+function Console({ onLogout }) {
   const [tenants, setTenants] = useState([]);
   const [activeTenant, setActiveTenant] = useState(null);
   const [sessions, setSessions] = useState([]);
@@ -13,16 +23,24 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [stats, setStats] = useState(null);
   const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [view, setView] = useState("console"); // "console" | "admin"
 
-  // Load tenants once
+  const theme = themeFor(activeTenant);
+
+  // Re-theme the console to the active tenant
   useEffect(() => {
-    api.getTenants().then((d) => {
+    document.documentElement.style.setProperty("--tenant", theme.accent);
+  }, [theme.accent]);
+
+  const loadTenants = useCallback(() => {
+    return api.getTenants().then((d) => {
       setTenants(d.tenants);
-      if (d.tenants.length) setActiveTenant(d.tenants[0].tenant_id);
+      setActiveTenant((cur) => cur || (d.tenants[0]?.tenant_id ?? null));
     }).catch(console.error);
   }, []);
 
-  // Load sessions for active tenant + poll every 5s (skip when tab hidden)
+  useEffect(() => { loadTenants(); }, [loadTenants]);
+
   const loadSessions = useCallback(() => {
     if (!activeTenant || document.hidden) return;
     api.getSessions(activeTenant).then((d) => setSessions(d.sessions)).catch(console.error);
@@ -35,7 +53,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [loadSessions]);
 
-  // Load messages for active session + poll every 3s (skip when tab hidden)
   const loadMessages = useCallback(() => {
     if (!activeSession || document.hidden) return;
     api.getMessages(activeSession.session_id).then((d) => setMessages(d.messages)).catch(console.error);
@@ -47,69 +64,75 @@ export default function App() {
     return () => clearInterval(id);
   }, [loadMessages]);
 
-  // Reset session when switching tenant
   useEffect(() => {
     setActiveSession(null);
     setMessages([]);
   }, [activeTenant]);
 
-  // Keep activeSession status fresh from polled sessions
+  // keep active session status fresh
   useEffect(() => {
-    if (activeSession) {
-      const fresh = sessions.find((s) => s.session_id === activeSession.session_id);
-      if (fresh && fresh.status !== activeSession.status) setActiveSession(fresh);
-    }
-  }, [sessions]); // eslint-disable-line
+    if (!activeSession) return;
+    const fresh = sessions.find((s) => s.session_id === activeSession.session_id);
+    if (fresh && fresh.status !== activeSession.status) setActiveSession(fresh);
+  }, [sessions, activeSession]);
+
+  const activeTenantObj = tenants.find((t) => t.tenant_id === activeTenant);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
-      {/* Top bar */}
-      <header className="bg-white border-b px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold text-gray-800">
-            <span className="text-wa-green">●</span> WhatsApp Agent Console
-          </h1>
-          <TenantSwitcher tenants={tenants} activeTenant={activeTenant} onSelect={setActiveTenant} />
-        </div>
-        <div className="flex items-center gap-4">
-          {stats && (
-            <div className="flex gap-3 text-xs">
-              <Stat label="Total" value={stats.total_sessions} color="text-gray-700" />
-              <Stat label="Active" value={stats.active} color="text-blue-600" />
-              <Stat label="Resolved" value={stats.resolved} color="text-green-600" />
-              <Stat label="Needs Human" value={stats.needs_human} color="text-red-600" />
+    <div className="h-full flex bg-canvas text-ink">
+      {/* Far-left workspace rail */}
+      <WorkspaceRail
+        tenants={tenants}
+        activeTenant={activeTenant}
+        onSelect={setActiveTenant}
+        onBroadcast={() => setBroadcastOpen(true)}
+        view={view}
+        onViewChange={setView}
+        onLogout={onLogout}
+      />
+
+      {view === "admin" ? (
+        <AdminPanel
+          tenantId={activeTenant}
+          tenantName={activeTenantObj?.name || "—"}
+          tenants={tenants}
+          onSelectTenant={setActiveTenant}
+          onTenantsChanged={loadTenants}
+        />
+      ) : (
+        <>
+          {/* Middle: header + stats + conversation list */}
+          <section className="w-[360px] shrink-0 flex flex-col border-r border-hair bg-surface">
+            <header className="px-5 pt-5 pb-4 border-b border-hair">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-faint uppercase tracking-[0.14em]">
+                <span className="w-1.5 h-1.5 rounded-full accent-bg animate-pulsedot" />
+                Live console
+              </div>
+              <h1 className="font-display text-[22px] font-semibold leading-tight mt-1.5">
+                {activeTenantObj?.name || "—"}
+              </h1>
+              <p className="text-[13px] text-muted mt-0.5">{theme.persona}</p>
+              <StatStrip stats={stats} />
+            </header>
+
+            <div className="px-5 py-2.5 text-[11px] font-semibold text-faint uppercase tracking-[0.12em] border-b border-hair">
+              Conversations
             </div>
-          )}
-          <button
-            onClick={() => setBroadcastOpen(true)}
-            className="bg-wa-green text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-wa-teal transition-colors"
-          >
-            📢 Broadcast
-          </button>
-        </div>
-      </header>
+            <div className="flex-1 overflow-y-auto">
+              <ConversationList
+                sessions={sessions}
+                activeId={activeSession?.session_id}
+                onSelect={setActiveSession}
+              />
+            </div>
+          </section>
 
-      {/* Main split */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: sessions */}
-        <aside className="w-80 bg-white border-r flex flex-col shrink-0">
-          <div className="px-4 py-2 bg-gray-50 border-b text-xs font-semibold text-gray-500 uppercase">
-            Live Conversations
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            <ChatMonitor
-              sessions={sessions}
-              activeSession={activeSession?.session_id}
-              onSelect={setActiveSession}
-            />
-          </div>
-        </aside>
-
-        {/* Right: chat thread */}
-        <main className="flex-1 flex flex-col">
-          <ChatThread session={activeSession} messages={messages} />
-        </main>
-      </div>
+          {/* Right: chat thread */}
+          <main className="flex-1 min-w-0 flex flex-col">
+            <ChatThread session={activeSession} messages={messages} />
+          </main>
+        </>
+      )}
 
       <BroadcastDrawer
         open={broadcastOpen}
@@ -117,15 +140,6 @@ export default function App() {
         tenantId={activeTenant}
         sessions={sessions}
       />
-    </div>
-  );
-}
-
-function Stat({ label, value, color }) {
-  return (
-    <div className="text-center">
-      <div className={`font-bold ${color}`}>{value ?? 0}</div>
-      <div className="text-[10px] text-gray-400">{label}</div>
     </div>
   );
 }

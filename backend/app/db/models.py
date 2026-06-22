@@ -55,3 +55,16 @@ class KnowledgeDocModel(BaseModel):
     content: str
     source: str = "manual"
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CatalogItemModel(BaseModel):
+    """A visual product/service: image LINKED to structured data, searchable by description."""
+    item_id: str = Field(default_factory=lambda: str(uuid4()))
+    tenant_id: str
+    name: str
+    image_url: str
+    ai_description: str = ""          # auto-generated (Gemini Vision) or manual; drives search
+    price: str = ""
+    attributes: dict = Field(default_factory=dict)  # color, material, delivery_days, etc.
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)

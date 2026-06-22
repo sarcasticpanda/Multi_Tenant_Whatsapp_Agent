@@ -25,11 +25,31 @@ TOOLS = [
         },
     },
     {
+        "name": "search_catalog",
+        "description": (
+            "Search the visual product/service catalog and show the customer the single best-matching "
+            "item — its photo AND its details (price, colors, material, delivery time) together. "
+            "Use this when the customer wants to SEE or find a product by description rather than by exact name, "
+            "e.g. 'show me a green leather sofa', 'do you have a marble dining table', "
+            "'what beds do you have', 'I need an AC service'. The item's image is sent automatically."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "What the customer is looking for, in their own words.",
+                }
+            },
+            "required": ["description"],
+        },
+    },
+    {
         "name": "search_knowledge",
         "description": (
-            "Search the knowledge base for additional detailed information to answer "
-            "a customer's question about products, services, pricing, policies, or FAQs. "
-            "Use this when you need more specific details not already in your context."
+            "Search the knowledge base for FACTUAL answers about policies, delivery, warranty, "
+            "showrooms, payment, or general FAQs (not a specific product photo). "
+            "Use for questions like 'what is your return policy', 'how long is delivery', 'where are your showrooms'."
         ),
         "parameters": {
             "type": "object",

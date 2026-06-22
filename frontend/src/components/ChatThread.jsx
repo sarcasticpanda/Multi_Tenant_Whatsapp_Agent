@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
+import { STATUS } from "../tenants";
+import { displayUrl } from "../api/client";
 
-// Render WhatsApp markdown: *bold*, _italic_
 function renderText(text) {
   if (!text) return null;
-  const parts = text.split(/(\*[^*]+\*|_[^_]+_)/g);
+  const parts = String(text).split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
   return parts.map((p, i) => {
     if (p.startsWith("*") && p.endsWith("*")) return <strong key={i}>{p.slice(1, -1)}</strong>;
     if (p.startsWith("_") && p.endsWith("_")) return <em key={i}>{p.slice(1, -1)}</em>;
@@ -11,37 +12,35 @@ function renderText(text) {
   });
 }
 
-function fmtTime(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+const fmtTime = (iso) =>
+  iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
-function MediaBlock({ msg }) {
+function Media({ msg }) {
   if (!msg.media_url) return null;
   if (msg.media_type === "IMAGE") {
     return (
-      <img
-        src={msg.media_url}
-        alt="sent media"
-        className="rounded-lg mt-1 max-w-[220px] border border-black/5"
-        loading="lazy"
-      />
+      <a href={displayUrl(msg.media_url)} target="_blank" rel="noreferrer" className="block mt-1">
+        <img src={displayUrl(msg.media_url)} alt="" className="rounded-lg max-w-[240px] border border-black/5" loading="lazy" />
+      </a>
     );
   }
   if (msg.media_type === "DOCUMENT") {
     return (
       <a
-        href={msg.media_url}
+        href={displayUrl(msg.media_url)}
         target="_blank"
         rel="noreferrer"
-        className="flex items-center gap-2 mt-1 bg-white/70 rounded-lg px-3 py-2 border border-black/5 hover:bg-white"
+        className="flex items-center gap-2.5 mt-1 bg-black/[0.04] rounded-lg px-3 py-2.5 hover:bg-black/[0.07] transition-colors"
       >
-        <span className="text-red-500 text-xl">📄</span>
+        <span className="w-9 h-9 rounded-lg bg-alert/10 flex items-center justify-center shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4543F" strokeWidth="1.6">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeLinejoin="round"/>
+            <path d="M14 2v6h6" strokeLinejoin="round"/>
+          </svg>
+        </span>
         <div className="min-w-0">
-          <div className="text-xs font-medium text-gray-800 truncate">
-            {msg.media_filename || "Document.pdf"}
-          </div>
-          <div className="text-[10px] text-gray-500">PDF • tap to open</div>
+          <div className="text-[13px] font-medium text-ink truncate">{msg.media_filename || "Document.pdf"}</div>
+          <div className="text-[11px] text-muted">PDF · tap to open</div>
         </div>
       </a>
     );
@@ -51,80 +50,95 @@ function MediaBlock({ msg }) {
 
 export default function ChatThread({ session, messages }) {
   const endRef = useRef(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, session]);
 
   if (!session) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm chat-bg">
-        Select a conversation to view the chat
+      <div className="flex-1 flex flex-col items-center justify-center chat-canvas">
+        <div className="w-16 h-16 rounded-2xl bg-white shadow-card flex items-center justify-center mb-4">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#2D5A4A" strokeWidth="1.5">
+            <path d="M21 11.5a8.4 8.4 0 01-12 7.6L3 21l1.9-5.8A8.5 8.5 0 1121 11.5z" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+        <p className="text-[14px] font-medium text-ink">Select a conversation</p>
+        <p className="text-[12px] text-muted mt-1">Pick a customer on the left to audit the thread.</p>
       </div>
     );
   }
 
+  const st = STATUS[session.status] || STATUS.WAITING_FOR_BOT;
   const needsHuman = session.status === "NEEDS_HUMAN";
 
   return (
-    <div className={`flex-1 flex flex-col ${needsHuman ? "ring-4 ring-red-400 ring-inset" : ""}`}>
-      {/* Header */}
-      <div className="bg-wa-dark text-white px-4 py-3 flex items-center gap-3 shrink-0">
-        <div className="w-9 h-9 rounded-full bg-wa-teal flex items-center justify-center text-sm font-semibold">
-          {session.customer_phone.slice(-2)}
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* Thread header */}
+      <div className="bg-chat-header text-white px-5 py-3 flex items-center gap-3 shrink-0">
+        <div className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center font-mono text-[12px]">
+          {String(session.customer_phone).slice(-2)}
         </div>
-        <div className="flex-1">
-          <div className="font-medium text-sm">{session.customer_phone}</div>
-          <div className="text-[11px] text-white/70">{session.status}</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-mono text-[14px] tracking-tight">{session.customer_phone}</div>
+          <div className="text-[11.5px] text-white/70 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: st.dot }} />
+            {st.label}
+          </div>
         </div>
         {needsHuman && (
-          <span className="bg-red-500 text-white text-[11px] px-2 py-1 rounded-full font-semibold">
-            ⚠ NEEDS HUMAN
+          <span className="bg-alert text-white text-[11px] font-semibold px-2.5 py-1 rounded-full flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L14.4 3.9a2 2 0 00-3.4 0z" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Human needed
           </span>
         )}
       </div>
 
+      {/* Escalation banner */}
+      {needsHuman && (
+        <div className="bg-alert/8 border-b border-alert/20 px-5 py-2 text-[12px] text-alert font-medium">
+          Auto-replies paused — this customer needs a human agent.
+        </div>
+      )}
+
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto chat-bg p-4 space-y-2">
-        {messages.map((m) => {
-          const outbound = m.direction === "OUTBOUND";
+      <div className="flex-1 overflow-y-auto chat-canvas px-5 py-4 space-y-1.5">
+        {messages.map((m, i) => {
+          const out = m.direction === "OUTBOUND";
+          const prev = messages[i - 1];
+          const grouped = prev && prev.direction === m.direction;
           return (
-            <div key={m.message_id} className={`flex ${outbound ? "justify-end" : "justify-start"}`}>
+            <div key={m.message_id} className={`flex ${out ? "justify-end" : "justify-start"} ${grouped ? "mt-0.5" : "mt-2.5"}`}>
               <div
-                className={`max-w-[75%] rounded-lg px-3 py-2 shadow-sm ${
-                  outbound ? "bg-wa-bubble" : "bg-white"
+                className={`max-w-[68%] rounded-lg px-2.5 py-1.5 shadow-sm relative ${
+                  out ? "bg-chat-out rounded-tr-sm" : "bg-chat-in rounded-tl-sm"
                 }`}
               >
                 {m.text_content && (
-                  <div className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+                  <div className="text-[13.5px] leading-[1.4] text-ink whitespace-pre-wrap break-words">
                     {renderText(m.text_content)}
                   </div>
                 )}
-                <MediaBlock msg={m} />
-                <div className="flex items-center justify-end gap-1 mt-1">
-                  {/* Typing metadata indicator (shows the bot acknowledged + was thinking) */}
+                <Media msg={m} />
+                <div className="flex items-center justify-end gap-1 mt-0.5 -mb-0.5">
                   {m.agent_state === "TYPING" && (
-                    <span className="text-[9px] text-blue-400 italic mr-auto">🤖 bot read & started typing…</span>
+                    <span className="text-[9px] text-brand-deep/70 italic mr-auto">read · started typing</span>
                   )}
-                  <span className="text-[10px] text-gray-400">{fmtTime(m.timestamp)}</span>
-                  {outbound && <span className="text-[10px] text-blue-400">✓✓</span>}
+                  <span className="text-[10px] text-muted font-mono tabular">{fmtTime(m.timestamp)}</span>
+                  {out && <span className="text-[11px] text-[#34B7F1] leading-none">✓✓</span>}
                 </div>
               </div>
             </div>
           );
         })}
 
-        {/* Live typing bubble — shown while the agent is actively responding */}
+        {/* Live typing bubble */}
         {session.status === "AGENT_RESPONDING" && (
-          <div className="flex justify-start">
-            <div className="bg-white rounded-lg px-3 py-2 shadow-sm">
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 italic">bot is typing</span>
-                <span className="flex gap-0.5">
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                </span>
-              </div>
+          <div className="flex justify-start mt-2.5">
+            <div className="bg-chat-in rounded-lg rounded-tl-sm px-3 py-2.5 shadow-sm flex items-center gap-1.5">
+              <span className="text-[12px] text-muted italic">typing</span>
+              <span className="flex gap-1">
+                {[0, 150, 300].map((d) => (
+                  <span key={d} className="w-1.5 h-1.5 rounded-full bg-faint animate-pulsedot" style={{ animationDelay: `${d}ms` }} />
+                ))}
+              </span>
             </div>
           </div>
         )}
