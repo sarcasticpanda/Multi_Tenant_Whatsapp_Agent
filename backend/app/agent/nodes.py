@@ -367,6 +367,18 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
             final_reply = "I'm here to help! Could you tell me a bit more about what you're looking for?"
 
     state["llm_reply"] = final_reply
+    # DEDUP: never re-send a file already sent recently in this conversation
+    # (stops "Hello" re-sending the catalog and "any more?" re-sending the same sofa).
+    if media_url:
+        recent_media = {
+            m.get("media_url")
+            for m in (state.get("chat_history") or [])
+            if m.get("direction") == "OUTBOUND" and m.get("media_url")
+        }
+        if media_url in recent_media:
+            logger.info(f"[DEDUP] {media_url} already sent recently -> text only")
+            media_url = media_type = media_filename = None
+
     state["media_to_send"] = media_url
     state["media_type"] = media_type
     state["media_filename"] = media_filename
