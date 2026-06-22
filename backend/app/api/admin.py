@@ -182,6 +182,17 @@ async def admin_add_catalog_item(
     """
     import json
     db = get_db()
+    # A catalog product is a searchable IMAGE. Reject PDFs/other docs here — they
+    # belong in Media (send-by-keyword) or the 'Import catalog PDF' tool (extracts images).
+    ctype = (file.content_type or "").lower()
+    fname = (file.filename or "").lower()
+    is_image = ctype.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+    if not is_image:
+        raise HTTPException(
+            400,
+            "A product needs an image (JPG/PNG). For a PDF, use the Media tab (send-by-keyword) "
+            "or 'Import a catalog PDF' to auto-extract product images.",
+        )
     data = await file.read()
     file_id = await gridfs.upload_bytes(
         data, file.filename, file.content_type or "image/jpeg",

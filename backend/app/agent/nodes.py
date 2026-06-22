@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from datetime import datetime
 from uuid import uuid4
 
@@ -423,6 +424,18 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
             final_reply = "Here it is! 😊 Want to see more? I can share our full catalog."
         else:
             final_reply = "I'm here to help! Could you tell me a bit more about what you're looking for?"
+
+    # HONESTY GUARD: never claim to have sent/attached a file when none is attached
+    # (stops "I've sent you the s5 image" when search found nothing).
+    if not media_url and re.search(
+        r"(i'?ve sent|i have sent|just sent|sent you|i'?ve attached|attached is|"
+        r"here'?s the (image|photo|picture|pdf|catalog|document|diagram|invoice|file))",
+        final_reply or "", re.I,
+    ):
+        final_reply = (
+            "Hmm, I don't have that exact file on hand 😊 — but I can share our full "
+            "*catalog* so you can browse everything. Would you like me to send it over?"
+        )
 
     state["llm_reply"] = final_reply
     # DEDUP: never re-send a file already sent recently in this conversation
