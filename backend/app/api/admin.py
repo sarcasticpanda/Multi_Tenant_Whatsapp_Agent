@@ -21,6 +21,18 @@ router = APIRouter(prefix="/api/admin")
 logger = logging.getLogger(__name__)
 
 
+async def _delete_gridfs_if_owned(url: str) -> None:
+    """If a URL points to a GridFS file (/files/<id>), delete the underlying file so
+    removing an item doesn't leave an orphaned blob in the database."""
+    if not url or "/files/" not in url:
+        return
+    file_id = url.split("?")[0].rstrip("/").split("/files/")[-1].split(".")[0]
+    try:
+        await gridfs.delete_file(file_id)
+    except Exception as e:
+        logger.warning(f"GridFS cleanup failed for {url}: {e}")
+
+
 # --------------------------------------------------------------------------- #
 # Tenants CRUD
 # --------------------------------------------------------------------------- #
@@ -149,6 +161,13 @@ async def admin_add_media(
 @router.delete("/tenants/{tenant_id}/media/{keyword}")
 async def admin_remove_media(tenant_id: str, keyword: str):
     db = get_db()
+    tenant = await db.tenants.find_one({"tenant_id": tenant_id})
+    url = (tenant or {}).get("media_library", {}).get(keyword.lower(), "")
+    # Only delete the stored blob if no OTHER keyword points to the same file.
+    others = [k for k, u in (tenant or {}).get("media_library", {}).items()
+              if u == url and k != keyword.lower()]
+    if url and not others:
+        await _delete_gridfs_if_owned(url)
     await db.tenants.update_one(
         {"tenant_id": tenant_id}, {"$unset": {f"media_library.{keyword.lower()}": ""}}
     )
@@ -224,22 +243,25 @@ async def admin_add_catalog_item(
 @router.post("/tenants/{tenant_id}/catalog/from-pdf")
 async def admin_ingest_catalog_pdf(tenant_id: str, file: UploadFile = File(...)):
     """
-    Upload ONE catalog PDF -> extract every embedded product image,
-    describe each (Gemini Vision, page-text fallback), store in GridFS,
-    and create searchable catalog items automatically.
+    Upload ONE catalog PDF -> integrate BOTH layers:
+      • product images  -> searchable catalog items (bot can SHOW them)
+      • page text       -> knowledge chunks (bot can ANSWER about the contents)
     """
-    from app.rag.pdf_extractor import ingest_catalog_pdf
+    from app.rag.pdf_extractor import ingest_pdf_full
     db = get_db()
     if not await db.tenants.find_one({"tenant_id": tenant_id}):
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
-    summary = await ingest_catalog_pdf(tenant_id, data, file.filename)
+    summary = await ingest_pdf_full(tenant_id, data, file.filename)
     return {"ok": True, **summary}
 
 
 @router.delete("/catalog/{item_id}")
 async def admin_delete_catalog_item(item_id: str):
     db = get_db()
+    item = await db.catalog_items.find_one({"item_id": item_id})
+    if item:
+        await _delete_gridfs_if_owned(item.get("image_url", ""))
     await db.catalog_items.delete_one({"item_id": item_id})
     await build_chroma_index()
     return {"ok": True}
@@ -263,6 +285,21 @@ async def admin_list_knowledge(tenant_id: str):
     return {"docs": docs}
 
 
+@router.post("/tenants/{tenant_id}/knowledge/from-pdf")
+async def admin_ingest_knowledge_pdf(tenant_id: str, file: UploadFile = File(...)):
+    """
+    Upload a PDF as KNOWLEDGE: extract its text, chunk it, embed it — so the bot can
+    answer questions about the document's contents (document RAG).
+    """
+    from app.rag.pdf_extractor import ingest_text_pdf
+    db = get_db()
+    if not await db.tenants.find_one({"tenant_id": tenant_id}):
+        raise HTTPException(404, "Tenant not found")
+    data = await file.read()
+    summary = await ingest_text_pdf(tenant_id, data, file.filename)
+    return {"ok": True, **summary}
+
+
 @router.post("/knowledge")
 async def admin_add_knowledge(body: KnowledgeIn):
     db = get_db()
@@ -281,6 +318,15 @@ async def admin_delete_knowledge(doc_id: str):
     await db.knowledge_docs.delete_one({"doc_id": doc_id})
     await build_chroma_index()
     return {"ok": True}
+
+
+@router.delete("/tenants/{tenant_id}/knowledge/by-source")
+async def admin_delete_knowledge_by_source(tenant_id: str, source_pdf: str):
+    """Remove every chunk that came from one imported PDF in a single action."""
+    db = get_db()
+    res = await db.knowledge_docs.delete_many({"tenant_id": tenant_id, "source_pdf": source_pdf})
+    await build_chroma_index()
+    return {"ok": True, "deleted": res.deleted_count}
 
 
 # --------------------------------------------------------------------------- #

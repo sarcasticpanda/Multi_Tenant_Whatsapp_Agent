@@ -84,8 +84,68 @@ async def _describe(image_bytes: bytes, page_text: str) -> tuple[str, str]:
     return fallback_name, fallback_desc
 
 
-async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str) -> dict:
-    """Full pipeline. Returns a summary."""
+def _chunk_text(text: str, size: int = 800, overlap: int = 120) -> list[str]:
+    """Split text into overlapping ~800-char chunks for embedding."""
+    text = " ".join(text.split())
+    chunks, i = [], 0
+    while i < len(text):
+        chunk = text[i:i + size].strip()
+        if chunk:
+            chunks.append(chunk)
+        i += size - overlap
+    return chunks
+
+
+async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True) -> dict:
+    """
+    DOCUMENT RAG: read a PDF's TEXT (page by page), chunk it, and store each chunk as a
+    knowledge_doc so the bot can answer questions about the document's contents.
+    (Different from ingest_catalog_pdf, which extracts product IMAGES.)
+    """
+    db = get_db()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = len(doc)
+    base = source_name.rsplit(".", 1)[0][:50]
+    created = 0
+    for pno in range(pages):
+        text = doc[pno].get_text().strip()
+        if not text:
+            continue
+        for ci, chunk in enumerate(_chunk_text(text)):
+            await db.knowledge_docs.insert_one({
+                "doc_id": str(uuid4()), "tenant_id": tenant_id, "doc_type": "document",
+                "title": f"{base} · p{pno + 1}" + (f".{ci + 1}" if ci else ""),
+                "content": chunk, "source": "pdf", "source_pdf": source_name,
+                "created_at": datetime.utcnow(),
+            })
+            created += 1
+    doc.close()
+    if created and rebuild:
+        await build_chroma_index()
+    note = "" if created else "No selectable text found — this PDF may be scanned images."
+    return {"pages": pages, "text_chunks": created, "note": note}
+
+
+async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str) -> dict:
+    """
+    One upload, BOTH layers integrated:
+      • product IMAGES  -> searchable catalog items (so the bot can SHOW them)
+      • page TEXT       -> knowledge chunks (so the bot can ANSWER about the contents)
+    Rebuilds the RAG index once at the end.
+    """
+    cat = await ingest_catalog_pdf(tenant_id, pdf_bytes, source_name, rebuild=False)
+    txt = await ingest_text_pdf(tenant_id, pdf_bytes, source_name, rebuild=False)
+    await build_chroma_index()
+    return {
+        "images_found": cat.get("images_found", 0),
+        "items_created": cat.get("items_created", 0),
+        "text_chunks": txt.get("text_chunks", 0),
+        "note": cat.get("note", "") or txt.get("note", ""),
+    }
+
+
+async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True) -> dict:
+    """Extract product IMAGES -> searchable catalog items. Returns a summary."""
     db = get_db()
     extracted = _extract(pdf_bytes)
     if not extracted:
@@ -112,5 +172,6 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str)
         })
         created += 1
 
-    await build_chroma_index()  # make all new items searchable
+    if rebuild:
+        await build_chroma_index()  # make all new items searchable
     return {"images_found": len(extracted), "items_created": created}

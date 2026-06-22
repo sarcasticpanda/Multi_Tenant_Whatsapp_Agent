@@ -352,7 +352,7 @@ function PdfImport({ tenantId, onDone }) {
         </span>
         <div className="flex-1">
           <div className="font-display font-semibold text-[14px] text-brand-deep">Import a catalog PDF</div>
-          <div className="text-[12px] text-muted">Auto-extracts every product image + details and makes them searchable.</div>
+          <div className="text-[12px] text-muted">Extracts product images <b>and</b> the text — the agent can show items <b>and</b> answer about them.</div>
         </div>
         <label className="shrink-0">
           <span className={`inline-block accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>{busy ? "Processing…" : "Upload PDF"}</span>
@@ -360,7 +360,7 @@ function PdfImport({ tenantId, onDone }) {
         </label>
       </div>
       {result && <div className={`text-[12px] mt-3 ${result.ok ? "text-brand-deep" : "text-alert"}`}>
-        {result.ok ? `Found ${result.images_found} image(s) → created ${result.items_created} product(s).${result.note ? " " + result.note : ""}` : result.error}
+        {result.ok ? `${result.items_created} product(s) from ${result.images_found} image(s) · ${result.text_chunks || 0} text chunk(s) indexed.${result.note ? " " + result.note : ""}` : result.error}
       </div>}
     </div>
   );
@@ -431,9 +431,15 @@ function KnowledgeTab({ tenantId }) {
   useEffect(() => { load(); }, [load]);
   const add = async () => { if (!form.title || !form.content) return; setBusy(true); try { await api.addKnowledge({ tenant_id: tenantId, doc_type: "faq", ...form }); setForm({ title: "", content: "" }); load(); } finally { setBusy(false); } };
 
+  // Manual entries shown individually; PDF-imported chunks grouped by their source file.
+  const manual = docs.filter((d) => !d.source_pdf);
+  const byPdf = {};
+  docs.filter((d) => d.source_pdf).forEach((d) => { (byPdf[d.source_pdf] ||= []).push(d); });
+  const pdfGroups = Object.entries(byPdf);
+
   return (
     <TabLayout
-      intro="The facts your agent answers from — pricing, policies, hours, warranty. For each question it retrieves the most relevant entry and answers from it, instead of guessing."
+      intro="The facts your agent answers from — pricing, policies, hours, warranty. Type entries, or import a PDF and the agent can answer questions about its contents."
       count={docs.length}
       countLabel="entry"
       countPlural="entries"
@@ -449,22 +455,74 @@ function KnowledgeTab({ tenantId }) {
         </SidebarCard>
       }
     >
+      <KnowledgePdfImport tenantId={tenantId} onDone={load} />
       {docs.length === 0 ? (
-        <EmptyState icon="book" title="No knowledge yet" hint="Add prices, policies or hours on the right so the agent can answer accurately." />
+        <EmptyState icon="book" title="No knowledge yet" hint="Type an entry on the right, or import a PDF the agent can answer from." />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {docs.map((d) => (
-            <div key={d.doc_id} className="bg-surface border border-hair rounded-xl px-4 py-3.5 hover:shadow-card transition-shadow">
-              <div className="flex items-start justify-between gap-2">
-                <span className="font-display font-semibold text-[13.5px]">{d.title}</span>
-                <button onClick={async () => { await api.deleteKnowledge(d.doc_id); load(); }} className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
+        <div className="space-y-3 mt-5">
+          {/* Imported documents — grouped, one Remove deletes the whole file */}
+          {pdfGroups.map(([src, chunks]) => (
+            <div key={src} className="bg-surface border border-hair rounded-xl px-4 py-3.5 flex items-center gap-3">
+              <span className="w-8 h-8 rounded-lg bg-alert/10 flex items-center justify-center shrink-0">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C4543F" strokeWidth="1.7"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeLinejoin="round"/><path d="M14 2v6h6" strokeLinejoin="round"/></svg>
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-display font-semibold text-[13.5px] truncate">{src}</div>
+                <div className="text-[11.5px] text-muted">Imported document · {chunks.length} searchable chunk{chunks.length === 1 ? "" : "s"}</div>
               </div>
-              <p className="text-[12px] text-muted mt-1.5 line-clamp-3 leading-relaxed">{d.content}</p>
+              <button onClick={async () => { if (window.confirm(`Remove “${src}” and all ${chunks.length} chunks?`)) { await api.deleteKnowledgeBySource(tenantId, src); load(); } }}
+                className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
             </div>
           ))}
+          {/* Manual entries */}
+          {manual.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {manual.map((d) => (
+                <div key={d.doc_id} className="bg-surface border border-hair rounded-xl px-4 py-3.5 hover:shadow-card transition-shadow">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-display font-semibold text-[13.5px]">{d.title}</span>
+                    <button onClick={async () => { await api.deleteKnowledge(d.doc_id); load(); }} className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
+                  </div>
+                  <p className="text-[12px] text-muted mt-1.5 line-clamp-3 leading-relaxed">{d.content}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </TabLayout>
+  );
+}
+
+function KnowledgePdfImport({ tenantId, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const onPick = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setBusy(true); setResult(null);
+    try { const r = await api.ingestKnowledgePdf(tenantId, file); setResult({ ok: true, ...r }); onDone?.(); }
+    catch (err) { setResult({ ok: false, error: err.message }); }
+    finally { setBusy(false); e.target.value = ""; }
+  };
+  return (
+    <div className="bg-brand-soft/60 border border-brand/20 rounded-xl p-4">
+      <div className="flex items-center gap-3">
+        <span className="w-9 h-9 rounded-lg bg-surface flex items-center justify-center shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B5C4E" strokeWidth="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeLinejoin="round"/><path d="M14 2v6h6" strokeLinejoin="round"/></svg>
+        </span>
+        <div className="flex-1">
+          <div className="font-display font-semibold text-[14px] text-brand-deep">Import a PDF as knowledge</div>
+          <div className="text-[12px] text-muted">Reads the document's text so the agent can answer questions about its contents.</div>
+        </div>
+        <label className="shrink-0">
+          <span className={`inline-block accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>{busy ? "Reading…" : "Upload PDF"}</span>
+          <input type="file" accept="application/pdf" className="hidden" onChange={onPick} disabled={busy} />
+        </label>
+      </div>
+      {result && <div className={`text-[12px] mt-3 ${result.ok ? "text-brand-deep" : "text-alert"}`}>
+        {result.ok ? `Indexed ${result.text_chunks} text chunk(s) from ${result.pages} page(s).${result.note ? " " + result.note : ""}` : result.error}
+      </div>}
+    </div>
   );
 }
 

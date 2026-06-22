@@ -116,4 +116,11 @@ export const api = {
   knowledge: (id) => get(`/api/admin/tenants/${id}/knowledge`),
   addKnowledge: (p) => send("/api/admin/knowledge", "POST", p),
   deleteKnowledge: (docId) => send(`/api/admin/knowledge/${docId}`, "DELETE"),
+  ingestKnowledgePdf: (id, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return upload(`/api/admin/tenants/${id}/knowledge/from-pdf`, fd);
+  },
+  deleteKnowledgeBySource: (id, sourcePdf) =>
+    send(`/api/admin/tenants/${id}/knowledge/by-source?source_pdf=${encodeURIComponent(sourcePdf)}`, "DELETE"),
 };
