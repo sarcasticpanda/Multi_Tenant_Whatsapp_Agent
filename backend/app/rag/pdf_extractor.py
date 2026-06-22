@@ -95,12 +95,13 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str)
     created = 0
     for item in extracted:
         # store image in GridFS
+        img_filename = f"catalog_{uuid4().hex[:8]}.{item['ext']}"
         file_id = await gridfs.upload_bytes(
-            item["image_bytes"], f"catalog_{uuid4().hex[:8]}.{item['ext']}",
+            item["image_bytes"], img_filename,
             f"image/{'jpeg' if item['ext'] in ('jpg', 'jpeg') else item['ext']}",
             {"tenant_id": tenant_id, "source_pdf": source_name},
         )
-        image_url = gridfs.public_url(file_id)
+        image_url = gridfs.public_url(file_id, img_filename)
         name, description = await _describe(item["image_bytes"], item["page_text"])
 
         await db.catalog_items.insert_one({

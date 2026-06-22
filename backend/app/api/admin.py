@@ -139,7 +139,7 @@ async def admin_add_media(
         data, file.filename, file.content_type or "application/octet-stream",
         {"tenant_id": tenant_id, "keyword": keyword},
     )
-    url = gridfs.public_url(file_id)
+    url = gridfs.public_url(file_id, file.filename)
     await db.tenants.update_one(
         {"tenant_id": tenant_id}, {"$set": {f"media_library.{keyword.lower()}": url}}
     )
@@ -198,7 +198,7 @@ async def admin_add_catalog_item(
         data, file.filename, file.content_type or "image/jpeg",
         {"tenant_id": tenant_id, "catalog": name},
     )
-    image_url = gridfs.public_url(file_id)
+    image_url = gridfs.public_url(file_id, file.filename)
 
     ai_description = description
     if auto_describe and not description:

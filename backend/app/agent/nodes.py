@@ -275,6 +275,34 @@ def _build_system_prompt(tenant: dict, rag_chunks: list, catalog_names: list | N
     return prompt
 
 
+async def _media_kind(url: str) -> str:
+    """
+    Decide whether a media URL is a 'DOCUMENT' (PDF) or 'IMAGE'. Uses the file
+    extension when present; for extension-less GridFS URLs (/files/<id>) it looks up
+    the stored content_type — so PDFs uploaded via the dashboard are sent as documents,
+    not as broken images.
+    """
+    low = (url or "").split("?")[0].lower()
+    if low.endswith(".pdf"):
+        return "DOCUMENT"
+    if low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        return "IMAGE"
+    if "/files/" in low:
+        ref = url.split("?")[0].rstrip("/").split("/files/")[-1].split(".")[0]
+        try:
+            from bson import ObjectId
+            doc = await get_db()["media.files"].find_one(
+                {"_id": ObjectId(ref)}, {"metadata.content_type": 1, "filename": 1}
+            )
+            ct = ((doc or {}).get("metadata") or {}).get("content_type", "")
+            fn = (doc or {}).get("filename", "")
+            if "pdf" in ct.lower() or fn.lower().endswith(".pdf"):
+                return "DOCUMENT"
+        except Exception as e:
+            logger.warning(f"_media_kind lookup failed for {url}: {e}")
+    return "IMAGE"
+
+
 async def llm_reasoning_node(state: AgentState) -> AgentState:
     """
     Primary reasoning via Groq (llama-3.3-70b) with tool calling.
@@ -356,10 +384,9 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
                 for key, url in (tenant.get("media_library") or {}).items():
                     if keyword in key.lower() or key.lower() in keyword:
                         media_url, matched = url, key
-                        if url.lower().endswith(".pdf"):
-                            media_type = "DOCUMENT"; media_filename = f"{key.title().replace(' ', '_')}.pdf"
-                        else:
-                            media_type = "IMAGE"
+                        media_type = await _media_kind(url)
+                        if media_type == "DOCUMENT":
+                            media_filename = f"{key.title().replace(' ', '_')}.pdf"
                         logger.info(f"[MEDIA] matched {key!r} -> {media_type}: {url}")
                         break
                 result = ({"status": "sent", "item": matched, "type": media_type}
@@ -381,7 +408,7 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
                         }
                     else:
                         media_url = item["image_url"]
-                        media_type = "DOCUMENT" if media_url.lower().endswith(".pdf") else "IMAGE"
+                        media_type = await _media_kind(media_url)
                         if media_type == "DOCUMENT":
                             media_filename = f"{item['name'].replace(' ', '_')}.pdf"
                         logger.info(f"[CATALOG] matched {item['name']!r} -> {media_url}")

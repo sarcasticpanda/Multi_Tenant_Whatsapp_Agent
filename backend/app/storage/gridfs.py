@@ -56,6 +56,13 @@ async def delete_file(file_id: str) -> bool:
         return False
 
 
-def public_url(file_id: str) -> str:
-    """Build the public URL that WhatsApp / the dashboard will fetch."""
-    return f"{settings.app_base_url}/files/{file_id}"
+def public_url(file_id: str, filename: str = "") -> str:
+    """
+    Build the public URL that WhatsApp / the dashboard will fetch.
+    Append the original file extension so the type (PDF vs image) is visible from the
+    URL — the bot decides image-vs-document and the dashboard picks the icon from it.
+    """
+    ext = ""
+    if filename and "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+    return f"{settings.app_base_url}/files/{file_id}{ext}"
