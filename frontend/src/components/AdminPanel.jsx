@@ -278,45 +278,52 @@ function CatalogTab({ tenantId }) {
   };
 
   return (
-    <div className="max-w-4xl">
-      <p className="text-[13px] text-muted mb-4">Visual products the bot finds by description (image + price + details). Blank description = AI fills it from the image.</p>
-      <PdfImport tenantId={tenantId} onDone={load} />
-
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        {items.map((it) => (
-          <div key={it.item_id} className="bg-surface border border-hair rounded-xl overflow-hidden flex">
-            <img src={displayUrl(it.image_url)} alt="" className="w-24 h-24 object-cover bg-canvas shrink-0" />
-            <div className="p-3 flex-1 min-w-0">
-              <div className="flex items-start justify-between gap-2">
-                <div className="font-display font-semibold text-[14px] truncate">{it.name}</div>
-                <button onClick={async () => { await api.deleteCatalog(it.item_id); load(); }} className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
-              </div>
-              {it.price && <div className="font-mono text-[12px] accent-text mt-0.5">{it.price}</div>}
-              <p className="text-[11.5px] text-muted mt-1 line-clamp-2">{it.ai_description}</p>
-            </div>
-          </div>
-        ))}
-        {items.length === 0 && <div className="col-span-2 text-[13px] text-faint">No catalog items yet.</div>}
-      </div>
-
-      <div className="bg-surface border border-hair rounded-xl p-4 max-w-2xl">
-        <div className="font-display font-semibold text-[14px] mb-3">Add a single product</div>
-        <div className="grid grid-cols-2 gap-3">
+    <TabLayout
+      intro="The products your agent can show and describe. Add photos, prices and details — or import a whole catalog PDF at once. Customers find these by describing what they want."
+      count={items.length}
+      countLabel="product"
+      aside={
+        <SidebarCard title="Add a product">
           <Field label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="Milano Sofa" />
-          <Field label="Price" value={form.price} onChange={(v) => setForm({ ...form, price: v })} placeholder="Rs 1,85,000" />
+          <Field label="Price" value={form.price} onChange={(v) => setForm({ ...form, price: v })} placeholder="Rs 1,85,000" className="mt-3" />
+          <Field label="Description" hint="leave blank to auto-generate from the image"
+            value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Italian leather, walnut frame…" className="mt-3" />
+          <div className="mt-3">
+            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Product image</label>
+            <input type="file" accept="image/*" onChange={(e) => setForm({ ...form, file: e.target.files[0] })}
+              className="block mt-1.5 w-full text-[12.5px] text-muted file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink file:text-[12px] file:cursor-pointer" />
+          </div>
+          {msg && <div className={`text-[12px] mt-3 ${msg.ok ? "accent-text" : "text-alert"}`}>{msg.ok || msg.err}</div>}
+          <button onClick={add} disabled={busy} className="mt-4 w-full accent-bg text-white text-[13px] font-medium px-4 py-2.5 rounded-lg disabled:opacity-40">
+            {busy ? "Uploading…" : "Add product"}
+          </button>
+        </SidebarCard>
+      }
+    >
+      <PdfImport tenantId={tenantId} onDone={load} />
+      {items.length === 0 ? (
+        <EmptyState icon="box" title="No products yet" hint="Import a catalog PDF above, or add your first product on the right." />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mt-5">
+          {items.map((it) => (
+            <div key={it.item_id} className="bg-surface border border-hair rounded-xl overflow-hidden group hover:shadow-card transition-shadow">
+              <div className="relative">
+                <img src={displayUrl(it.image_url)} alt="" className="w-full h-36 object-cover bg-canvas" loading="lazy" />
+                <button onClick={async () => { await api.deleteCatalog(it.item_id); load(); }}
+                  className="absolute top-2 right-2 bg-white/90 backdrop-blur text-faint hover:text-alert text-[11px] font-medium px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity">Remove</button>
+              </div>
+              <div className="p-3.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="font-display font-semibold text-[14px] truncate">{it.name}</div>
+                  {it.price && <div className="font-mono text-[12px] accent-text shrink-0">{it.price}</div>}
+                </div>
+                <p className="text-[11.5px] text-muted mt-1 line-clamp-2 leading-relaxed">{it.ai_description}</p>
+              </div>
+            </div>
+          ))}
         </div>
-        <Field label="Description (blank = AI from image)" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Italian leather, walnut frame…" className="mt-3" />
-        <div className="mt-3">
-          <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Product image</label>
-          <input type="file" accept="image/*" onChange={(e) => setForm({ ...form, file: e.target.files[0] })}
-            className="block mt-1 text-[13px] text-muted file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink file:text-[12px]" />
-        </div>
-        {msg && <div className={`text-[12px] mt-3 ${msg.ok ? "accent-text" : "text-alert"}`}>{msg.ok || msg.err}</div>}
-        <button onClick={add} disabled={busy} className="mt-4 accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg disabled:opacity-40">
-          {busy ? "Uploading…" : "Add product"}
-        </button>
-      </div>
-    </div>
+      )}
+    </TabLayout>
   );
 }
 
@@ -365,27 +372,46 @@ function MediaTab({ tenantId }) {
   const lib = tenant?.media_library || {};
 
   return (
-    <div className="max-w-3xl">
-      <p className="text-[13px] text-muted mb-4">Fixed files the bot sends by keyword (e.g. <span className="font-mono">catalog</span> → the catalog PDF). Stored in the database.</p>
-      <div className="bg-surface border border-hair rounded-xl divide-y divide-hair mb-6">
-        {Object.entries(lib).map(([k, url]) => (
-          <div key={k} className="flex items-center gap-3 px-4 py-2.5">
-            <span className="font-mono text-[12px] bg-canvas px-2 py-0.5 rounded text-ink">{k}</span>
-            <a href={displayUrl(url)} target="_blank" rel="noreferrer" className="text-[12px] text-muted truncate flex-1 hover:accent-text">{url.split("/").pop()}</a>
-            <button onClick={async () => { await api.removeMedia(tenantId, k); load(); }} className="text-faint hover:text-alert text-[12px]">Remove</button>
+    <TabLayout
+      intro={<>Ready-to-send files, each mapped to a keyword. When a customer asks for one — e.g. <span className="font-mono text-ink">“send the catalog”</span> — the agent attaches the matching file automatically.</>}
+      count={Object.keys(lib).length}
+      countLabel="file"
+      aside={
+        <SidebarCard title="Add a file">
+          <Field label="Keyword" hint="what a customer might ask for" value={keyword} onChange={setKeyword} placeholder="catalog" />
+          <div className="mt-3">
+            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">File (PDF or image)</label>
+            <input type="file" onChange={(e) => setFile(e.target.files[0])}
+              className="block mt-1.5 w-full text-[12.5px] text-muted file:mr-2 file:px-2.5 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink file:cursor-pointer" />
           </div>
-        ))}
-        {Object.keys(lib).length === 0 && <div className="px-4 py-3 text-[13px] text-faint">No media yet.</div>}
-      </div>
-      <div className="bg-surface border border-hair rounded-xl p-4 flex items-end gap-3">
-        <div className="flex-1"><Field label="Keyword" value={keyword} onChange={setKeyword} placeholder="catalog" /></div>
-        <div className="flex-1">
-          <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">File (PDF / image)</label>
-          <input type="file" onChange={(e) => setFile(e.target.files[0])} className="block mt-1 text-[12px] text-muted file:mr-2 file:px-2.5 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink" />
+          <button onClick={add} disabled={busy} className="mt-4 w-full accent-bg text-white text-[13px] font-medium px-4 py-2.5 rounded-lg disabled:opacity-40">{busy ? "Uploading…" : "Add file"}</button>
+        </SidebarCard>
+      }
+    >
+      {Object.keys(lib).length === 0 ? (
+        <EmptyState icon="file" title="No files yet" hint="Add a file on the right and give it a keyword the agent can match." />
+      ) : (
+        <div className="bg-surface border border-hair rounded-xl divide-y divide-hair">
+          {Object.entries(lib).map(([k, url]) => {
+            const isPdf = String(url).toLowerCase().endsWith(".pdf");
+            return (
+              <div key={k} className="flex items-center gap-3 px-4 py-3">
+                <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isPdf ? "bg-alert/10" : "bg-brand-soft"}`}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isPdf ? "#C4543F" : "#0B5C4E"} strokeWidth="1.7">
+                    {isPdf
+                      ? <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeLinejoin="round"/><path d="M14 2v6h6" strokeLinejoin="round"/></>
+                      : <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21" strokeLinejoin="round"/></>}
+                  </svg>
+                </span>
+                <span className="font-mono text-[12px] bg-canvas px-2 py-0.5 rounded text-ink shrink-0">{k}</span>
+                <a href={displayUrl(url)} target="_blank" rel="noreferrer" className="text-[12px] text-muted truncate flex-1 hover:accent-text">{url.split("/").pop()}</a>
+                <button onClick={async () => { await api.removeMedia(tenantId, k); load(); }} className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
+              </div>
+            );
+          })}
         </div>
-        <button onClick={add} disabled={busy} className="accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg disabled:opacity-40">{busy ? "Uploading…" : "Add"}</button>
-      </div>
-    </div>
+      )}
+    </TabLayout>
   );
 }
 
@@ -399,31 +425,39 @@ function KnowledgeTab({ tenantId }) {
   const add = async () => { if (!form.title || !form.content) return; setBusy(true); try { await api.addKnowledge({ tenant_id: tenantId, doc_type: "faq", ...form }); setForm({ title: "", content: "" }); load(); } finally { setBusy(false); } };
 
   return (
-    <div className="max-w-3xl">
-      <p className="text-[13px] text-muted mb-4">Text the bot answers factual questions from (policies, delivery, warranty). Semantically indexed.</p>
-      <div className="space-y-2 mb-6">
-        {docs.map((d) => (
-          <div key={d.doc_id} className="bg-surface border border-hair rounded-lg px-4 py-3">
-            <div className="flex items-center justify-between">
-              <span className="font-display font-semibold text-[13.5px]">{d.title}</span>
-              <button onClick={async () => { await api.deleteKnowledge(d.doc_id); load(); }} className="text-faint hover:text-alert text-[12px]">Remove</button>
-            </div>
-            <p className="text-[12px] text-muted mt-1 line-clamp-2">{d.content}</p>
+    <TabLayout
+      intro="The facts your agent answers from — pricing, policies, hours, warranty. For each question it retrieves the most relevant entry and answers from it, instead of guessing."
+      count={docs.length}
+      countLabel="entry"
+      countPlural="entries"
+      aside={
+        <SidebarCard title="Add an entry">
+          <Field label="Title" value={form.title} onChange={(v) => setForm({ ...form, title: v })} placeholder="Delivery Policy" />
+          <div className="mt-3">
+            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Content</label>
+            <textarea rows={6} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} placeholder="We deliver across India in 4–10 weeks…"
+              className="w-full mt-1.5 text-[13px] border border-hair rounded-lg p-2.5 focus:outline-none focus:border-brand resize-none leading-relaxed" />
           </div>
-        ))}
-        {docs.length === 0 && <div className="text-[13px] text-faint">No knowledge docs yet.</div>}
-      </div>
-      <div className="bg-surface border border-hair rounded-xl p-4">
-        <div className="font-display font-semibold text-[14px] mb-3">Add knowledge</div>
-        <Field label="Title" value={form.title} onChange={(v) => setForm({ ...form, title: v })} placeholder="Delivery Policy" />
-        <div className="mt-3">
-          <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Content</label>
-          <textarea rows={4} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} placeholder="We deliver across India in 4-10 weeks…"
-            className="w-full mt-1 text-[13px] border border-hair rounded-lg p-2.5 focus:outline-none focus:border-brand resize-none" />
+          <button onClick={add} disabled={busy} className="mt-4 w-full accent-bg text-white text-[13px] font-medium px-4 py-2.5 rounded-lg disabled:opacity-40">{busy ? "Saving…" : "Add entry"}</button>
+        </SidebarCard>
+      }
+    >
+      {docs.length === 0 ? (
+        <EmptyState icon="book" title="No knowledge yet" hint="Add prices, policies or hours on the right so the agent can answer accurately." />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {docs.map((d) => (
+            <div key={d.doc_id} className="bg-surface border border-hair rounded-xl px-4 py-3.5 hover:shadow-card transition-shadow">
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-display font-semibold text-[13.5px]">{d.title}</span>
+                <button onClick={async () => { await api.deleteKnowledge(d.doc_id); load(); }} className="text-faint hover:text-alert text-[12px] shrink-0">Remove</button>
+              </div>
+              <p className="text-[12px] text-muted mt-1.5 line-clamp-3 leading-relaxed">{d.content}</p>
+            </div>
+          ))}
         </div>
-        <button onClick={add} disabled={busy} className="mt-3 accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg disabled:opacity-40">{busy ? "Saving…" : "Add knowledge"}</button>
-      </div>
-    </div>
+      )}
+    </TabLayout>
   );
 }
 
@@ -469,9 +503,12 @@ function SettingsTab({ tenant }) {
           className="w-full mt-1 text-[13px] font-mono leading-relaxed border border-hair rounded-lg p-3 focus:outline-none focus:border-brand resize-none" />
       </div>
       <div className="mt-4">
-        <Field label="WhatsApp phone_number_id (this tenant's own number — leave shared for the test number)"
+        <Field label="WhatsApp number ID" hint="this tenant's own number — share the test number to route by keywords"
           value={phoneId} onChange={setPhoneId} placeholder="e.g. 1095181447021644" />
-        <p className="text-[11px] text-faint mt-1">Give a tenant its own WhatsApp number's id here and inbound messages to that number route to this tenant automatically — no manual assignment needed.</p>
+        <p className="text-[11px] text-faint mt-1.5 leading-relaxed">
+          Give a tenant its own WhatsApp number ID and messages to that number route here automatically — no manual
+          assignment. This is a public identifier (not a secret token), but changing it reroutes the tenant, so edit with care.
+        </p>
       </div>
       {err && <div className="text-[12px] text-alert mt-3">{err}</div>}
       <div className="flex items-center gap-3 mt-3">
@@ -484,12 +521,62 @@ function SettingsTab({ tenant }) {
 }
 
 /* ------------------------------- shared ------------------------------- */
-function Field({ label, value, onChange, placeholder, className = "" }) {
+function Field({ label, hint, value, onChange, placeholder, className = "" }) {
   return (
     <div className={className}>
-      <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">{label}</label>
+      <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">
+        {label}{hint && <span className="normal-case font-normal text-faint/80 tracking-normal"> · {hint}</span>}
+      </label>
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-        className="w-full mt-1 text-[13px] border border-hair rounded-lg px-3 py-2 focus:outline-none focus:border-brand" />
+        className="w-full mt-1.5 text-[13px] border border-hair rounded-lg px-3 py-2 focus:outline-none focus:border-brand" />
+    </div>
+  );
+}
+
+/* Two-column tab: a full-width intro + scrolling content on the left, a sticky
+   action card on the right. Replaces the old left-aligned, half-empty layout. */
+function TabLayout({ intro, count, countLabel, countPlural, aside, children }) {
+  const plural = countPlural || `${countLabel}s`;
+  return (
+    <div className="max-w-[1100px]">
+      <div className="flex items-baseline justify-between gap-4 mb-5">
+        <p className="text-[13px] text-muted leading-relaxed max-w-2xl">{intro}</p>
+        {count != null && (
+          <span className="shrink-0 text-[12px] text-faint whitespace-nowrap">
+            {count} {count === 1 ? countLabel : plural}
+          </span>
+        )}
+      </div>
+      <div className="flex gap-7 items-start">
+        <div className="flex-1 min-w-0">{children}</div>
+        <aside className="w-[330px] shrink-0 sticky top-0">{aside}</aside>
+      </div>
+    </div>
+  );
+}
+
+function SidebarCard({ title, children }) {
+  return (
+    <div className="bg-surface border border-hair rounded-xl p-4">
+      <div className="font-display font-semibold text-[14px] mb-3">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, hint }) {
+  const paths = {
+    box: <><path d="M21 8l-9-5-9 5v8l9 5 9-5z" strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" strokeLinejoin="round"/></>,
+    file: <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeLinejoin="round"/><path d="M14 2v6h6" strokeLinejoin="round"/></>,
+    book: <><path d="M4 19.5A2.5 2.5 0 016.5 17H20" strokeLinejoin="round"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" strokeLinejoin="round"/></>,
+  };
+  return (
+    <div className="border border-dashed border-hair rounded-xl py-12 flex flex-col items-center text-center">
+      <span className="w-11 h-11 rounded-xl bg-canvas flex items-center justify-center mb-3">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9AA4B0" strokeWidth="1.6">{paths[icon]}</svg>
+      </span>
+      <div className="text-[13.5px] font-medium text-ink">{title}</div>
+      <div className="text-[12px] text-muted mt-1 max-w-xs">{hint}</div>
     </div>
   );
 }
