@@ -61,6 +61,30 @@ async def tenant_stats(tenant_id: str):
     }
 
 
+class StatusUpdate(BaseModel):
+    status: str  # WAITING_FOR_BOT | AGENT_RESPONDING | RESOLVED | NEEDS_HUMAN
+
+
+@router.post("/api/sessions/{session_id}/status")
+async def set_session_status(session_id: str, body: StatusUpdate):
+    """
+    Let the business owner act on a conversation:
+    - 'RESOLVED'        → mark handled (closes it)
+    - 'NEEDS_HUMAN'     → take it over (bot halts)
+    - 'WAITING_FOR_BOT' → hand back to the bot (bot resumes on next message)
+    """
+    valid = {"WAITING_FOR_BOT", "AGENT_RESPONDING", "RESOLVED", "NEEDS_HUMAN"}
+    if body.status not in valid:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    db = get_db()
+    res = await db.chat_sessions.update_one(
+        {"session_id": session_id}, {"$set": {"status": body.status}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True, "status": body.status}
+
+
 class BroadcastRequest(BaseModel):
     tenant_id: str
     phone_numbers: list[str]

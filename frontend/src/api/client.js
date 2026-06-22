@@ -68,6 +68,7 @@ export const api = {
   getSessions: (id) => get(`/api/tenants/${id}/sessions`),
   getMessages: (sid) => get(`/api/sessions/${sid}/messages`),
   getStats: (id) => get(`/api/tenants/${id}/stats`),
+  setSessionStatus: (sid, status) => send(`/api/sessions/${sid}/status`, "POST", { status }),
   broadcast: (p) => send("/api/broadcast", "POST", p),
 
   // admin — tenants

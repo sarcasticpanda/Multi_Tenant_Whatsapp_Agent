@@ -123,7 +123,7 @@ function Console({ onLogout }) {
 
           {/* Right: chat thread */}
           <main className="flex-1 min-w-0 flex flex-col">
-            <ChatThread session={activeSession} messages={messages} />
+            <ChatThread session={activeSession} messages={messages} onChanged={loadSessions} />
           </main>
         </>
       )}

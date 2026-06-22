@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { STATUS } from "../tenants";
-import { displayUrl } from "../api/client";
+import { displayUrl, api } from "../api/client";
 
 function renderText(text) {
   if (!text) return null;
@@ -48,9 +48,15 @@ function Media({ msg }) {
   return null;
 }
 
-export default function ChatThread({ session, messages }) {
+export default function ChatThread({ session, messages, onChanged }) {
   const endRef = useRef(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, session]);
+
+  const changeStatus = async (status) => {
+    if (!session) return;
+    try { await api.setSessionStatus(session.session_id, status); onChanged?.(); }
+    catch (e) { console.error(e); }
+  };
 
   if (!session) {
     return (
@@ -90,12 +96,34 @@ export default function ChatThread({ session, messages }) {
             {st.label}
           </div>
         </div>
-        {needsHuman && (
-          <span className="bg-alert text-white text-[11px] font-semibold px-2.5 py-1 rounded-full flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L14.4 3.9a2 2 0 00-3.4 0z" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Human needed
-          </span>
-        )}
+        {/* Status actions */}
+        <div className="flex items-center gap-2">
+          {needsHuman ? (
+            <>
+              <button onClick={() => changeStatus("WAITING_FOR_BOT")}
+                className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
+                ↻ Resume bot
+              </button>
+              <button onClick={() => changeStatus("RESOLVED")}
+                className="bg-white text-brand-deep text-[11px] font-semibold px-2.5 py-1 rounded-full">
+                ✓ Resolve
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => changeStatus("NEEDS_HUMAN")}
+                className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
+                Take over
+              </button>
+              {session.status !== "RESOLVED" && (
+                <button onClick={() => changeStatus("RESOLVED")}
+                  className="bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors">
+                  ✓ Resolve
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Per-customer analytics strip */}
