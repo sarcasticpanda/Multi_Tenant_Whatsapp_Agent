@@ -17,19 +17,36 @@ from app.whatsapp import client as wa
 
 logger = logging.getLogger(__name__)
 
-# Gemini is used ONLY for vision (inbound image + catalog auto-describe).
-# Its free text quota is too small for the agent loop.
-_gemini_client = genai.Client(api_key=settings.gemini_api_key)
 GEMINI_MODEL = settings.gemini_model
 
-# Groq is the PRIMARY reasoning LLM — supports tool calling, generous free tier.
+# LLM clients are created LAZILY (on first use), never at import time — so a missing
+# or bad key can never crash app startup. Gemini = vision only; Groq = primary reasoning.
+_gemini_client = None
 _groq_client = None
-if settings.groq_api_key:
-    try:
-        from groq import Groq
-        _groq_client = Groq(api_key=settings.groq_api_key)
-    except Exception as e:
-        logger.warning(f"Groq client unavailable: {e}")
+_groq_init_done = False
+
+
+def _get_gemini():
+    global _gemini_client
+    if _gemini_client is None and settings.gemini_api_key:
+        try:
+            _gemini_client = genai.Client(api_key=settings.gemini_api_key)
+        except Exception as e:
+            logger.warning(f"Gemini client unavailable: {e}")
+    return _gemini_client
+
+
+def _get_groq():
+    global _groq_client, _groq_init_done
+    if not _groq_init_done:
+        _groq_init_done = True
+        if settings.groq_api_key:
+            try:
+                from groq import Groq
+                _groq_client = Groq(api_key=settings.groq_api_key)
+            except Exception as e:
+                logger.warning(f"Groq client unavailable: {e}")
+    return _groq_client
 
 # Tools in OpenAI/Groq function-calling format
 _groq_tools = [
@@ -156,7 +173,10 @@ async def context_retriever_node(state: AgentState) -> AgentState:
                 logger.warning(f"Failed to persist inbound image: {e}")
 
             # Gemini Vision description (fed into the LLM context)
-            vision_resp = _gemini_client.models.generate_content(
+            gem = _get_gemini()
+            if gem is None:
+                raise RuntimeError("Gemini client not available")
+            vision_resp = gem.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[
                     types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
@@ -238,12 +258,13 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         user_text = f"[Customer sent an image: {state['inbound_image_description']}]\n{user_text}"
     messages.append({"role": "user", "content": user_text})
 
-    if not _groq_client:
+    groq = _get_groq()
+    if not groq:
         state["llm_reply"] = "I'm here to help! Could you tell me a bit more about what you're looking for?"
         return state
 
     try:
-        resp = _groq_client.chat.completions.create(
+        resp = groq.chat.completions.create(
             model=settings.groq_model,
             messages=messages,
             tools=_groq_tools,
@@ -329,7 +350,7 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
 
         # Second call: let the model write the natural reply using tool results
         try:
-            resp2 = _groq_client.chat.completions.create(
+            resp2 = groq.chat.completions.create(
                 model=settings.groq_model, messages=messages, temperature=0.5, max_tokens=400,
             )
             final_reply = resp2.choices[0].message.content or final_reply
