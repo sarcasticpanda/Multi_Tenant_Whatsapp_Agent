@@ -87,6 +87,7 @@ function Directory({ tenants, onManage, onChanged }) {
 
 /* ---------------------------- Customer routing ---------------------------- */
 function RoutingPanel({ tenants }) {
+  const [open, setOpen] = useState(false);
   const [routes, setRoutes] = useState([]);
   const [phone, setPhone] = useState("");
   const [tenantId, setTenantId] = useState("");
@@ -94,7 +95,7 @@ function RoutingPanel({ tenants }) {
   const [msg, setMsg] = useState(null);
 
   const load = useCallback(() => { api.routing().then((d) => setRoutes(d.routes)).catch(console.error); }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (open) load(); }, [open, load]);
   useEffect(() => { if (!tenantId && tenants[0]) setTenantId(tenants[0].tenant_id); }, [tenants, tenantId]);
 
   const assign = async () => {
@@ -105,12 +106,23 @@ function RoutingPanel({ tenants }) {
   };
 
   return (
-    <div className="mt-9 max-w-3xl">
-      <h2 className="font-display text-[17px] font-semibold">Customer routing</h2>
-      <p className="text-[13px] text-muted mt-0.5 mb-4">
-        One shared bot number serves every tenant. A customer's phone number is assigned to exactly one
-        tenant — that decides which brand answers them. (For a one-phone demo, a customer can also text
-        <span className="font-mono"> #furniture</span> / <span className="font-mono">#autocare</span> to switch.)
+    <div className="mt-9 max-w-3xl border-t border-hair pt-6">
+      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-[13px] font-medium text-muted hover:text-ink">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+          className={`transition-transform ${open ? "rotate-90" : ""}`}><path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        Advanced · manual routing override
+      </button>
+      {!open && (
+        <p className="text-[12px] text-faint mt-1.5">
+          Routing is automatic — by the customer's words on a shared number, or by each tenant's own WhatsApp number.
+          This is an optional manual override for pinning a specific customer to a tenant.
+        </p>
+      )}
+      {!open ? null : (
+      <div className="mt-4">
+      <p className="text-[13px] text-muted mb-4">
+        Optional override. Normally a customer is routed automatically (by their message keywords on a shared
+        number, or by the tenant's own number). Use this only to pin a specific customer to a tenant by hand.
       </p>
 
       <div className="bg-surface border border-hair rounded-xl divide-y divide-hair mb-4">
@@ -143,6 +155,8 @@ function RoutingPanel({ tenants }) {
         <button onClick={assign} disabled={busy} className="accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg disabled:opacity-40">{busy ? "Saving…" : "Assign"}</button>
       </div>
       {msg && <div className={`text-[12px] mt-2 ${msg.ok ? "accent-text" : "text-alert"}`}>{msg.ok || msg.err}</div>}
+      </div>
+      )}
     </div>
   );
 }

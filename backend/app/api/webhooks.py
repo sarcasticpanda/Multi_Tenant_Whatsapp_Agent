@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+from collections import Counter
 from datetime import datetime
 from uuid import uuid4
 
@@ -60,30 +62,63 @@ def _extract_message(payload: dict) -> dict | None:
         return None
 
 
-def _tenant_signals(tenant: dict) -> set[str]:
-    """The words that confidently point at this tenant: its media-library keywords,
-    its switch_code, and the distinctive words in its name."""
-    signals = {k.lower() for k in (tenant.get("media_library") or {}).keys()}
-    if tenant.get("switch_code"):
-        signals.add(tenant["switch_code"].lower())
-    for w in tenant["name"].lower().replace("-", " ").replace("/", " ").split():
-        if len(w) >= 4:  # skip 'the', 'and', etc.
-            signals.add(w)
-    return {s for s in signals if len(s) >= 3}
+# Generic retail words that don't identify a specific brand.
+_STOPWORDS = {
+    "store", "stores", "services", "service", "care", "company", "shop", "the", "and",
+    "for", "ltd", "inc", "llp", "pvt", "limited", "private", "solutions", "group",
+    "world", "house", "hub", "center", "centre", "online", "official",
+}
 
 
-def _keyword_match(text: str, tenants: list[dict]) -> str | None:
+def _signals_from(*phrases) -> set[str]:
+    """Turn keywords/names into routing signals: the full phrase plus its individual
+    words (>=3 chars, minus generic stopwords). 'oil change' -> {'oil change','oil','change'}."""
+    out: set[str] = set()
+    for p in phrases:
+        p = (p or "").lower().strip()
+        if len(p) >= 3:
+            out.add(p)  # keep the full phrase too, so 'oil change' can match as a unit
+        for w in re.split(r"[\s/_\-]+", p):
+            if len(w) >= 3 and w not in _STOPWORDS:
+                out.add(w)
+    return {s for s in out if s not in _STOPWORDS}
+
+
+async def _tenant_vocab(db, tenant: dict) -> set[str]:
+    """Everything that could point at this tenant: media keywords, switch code,
+    brand name words, and its catalog product names."""
+    sig = _signals_from(*(tenant.get("media_library") or {}).keys())
+    sig |= _signals_from(tenant.get("switch_code"), tenant["name"])
+    items = await db.catalog_items.find(
+        {"tenant_id": tenant["tenant_id"]}, {"_id": 0, "name": 1}
+    ).to_list(None)
+    sig |= _signals_from(*[it.get("name") for it in items])
+    return sig
+
+
+def _best_tenant(text: str, vocab_by_tenant: dict[str, set[str]]) -> str | None:
     """
-    Auto-guess the tenant from the customer's words. A tenant 'matches' if any of its
-    signals appears in the message. We only return a tenant when EXACTLY ONE matches
-    (confident). Shared words (e.g. 'price') or greetings ('hi') match 0 or 2+ -> None,
-    which tells the caller to ask the customer which business they want.
+    Confident auto-route. Only 'discriminating' signals count — ones owned by exactly ONE
+    tenant. A word shared by two tenants (e.g. 'price') is ignored, since it tells us nothing.
+    The tenant whose discriminating words appear most in the message wins; a tie -> None (ask).
     """
     t = (text or "").lower()
     if not t.strip():
         return None
-    matched = {tn["tenant_id"] for tn in tenants if any(s in t for s in _tenant_signals(tn))}
-    return next(iter(matched)) if len(matched) == 1 else None
+    counts = Counter(s for vocab in vocab_by_tenant.values() for s in vocab)
+    scores: dict[str, int] = {}
+    for tid, vocab in vocab_by_tenant.items():
+        score = sum(
+            1 for s in vocab
+            if counts[s] == 1 and re.search(rf"\b{re.escape(s)}\b", t)
+        )
+        if score:
+            scores[tid] = score
+    if not scores:
+        return None
+    top = max(scores.values())
+    leaders = [tid for tid, sc in scores.items() if sc == top]
+    return leaders[0] if len(leaders) == 1 else None
 
 
 async def _resolve_or_triage(db, customer_phone: str, phone_number_id: str, text: str):
@@ -124,17 +159,27 @@ async def _resolve_or_triage(db, customer_phone: str, phone_number_id: str, text
     if len(candidates) == 1:
         return candidates[0]["tenant_id"], None
 
-    guess = _keyword_match(text, candidates)
+    vocab_by_tenant = {c["tenant_id"]: await _tenant_vocab(db, c) for c in candidates}
+    guess = _best_tenant(text, vocab_by_tenant)
     if guess:
         logger.info(f"[TRIAGE] auto-routed unassigned customer to {guess} from message keywords")
         return guess, None
 
     # Not confident -> ask the customer which business they want.
-    options = "\n".join(f"• {c['name']}" for c in candidates)
-    reply = (
-        "Hi! 👋 Thanks for reaching out. Which business would you like to chat with today?\n\n"
-        f"{options}\n\nJust reply with the name (or tell me what you need, e.g. a *sofa* or an *oil change*)."
-    )
+    # Enumerate only when the list is short; at scale (many tenants on one number),
+    # just ask for the name instead of printing an unusable list.
+    nudge = "or just tell me what you need (e.g. a *sofa* or an *oil change*)"
+    if len(candidates) <= 6:
+        options = "\n".join(f"• {c['name']}" for c in candidates)
+        reply = (
+            "Hi! 👋 Thanks for reaching out. Which business would you like to chat with today?\n\n"
+            f"{options}\n\nReply with the name, {nudge}."
+        )
+    else:
+        reply = (
+            "Hi! 👋 Thanks for reaching out. Please reply with the *name* of the business "
+            f"you'd like to reach, {nudge}, and I'll connect you."
+        )
     return None, reply
 
 
@@ -149,20 +194,25 @@ async def _handle_switch_command(db, text: str, customer_phone: str, phone_numbe
     from app.whatsapp.client import send_text_message
 
     stripped = (text or "").strip()
-    if not stripped.startswith("#"):
+    low = stripped.lower()
+    # Trigger on a '#code', or a plain word a real customer might use.
+    bare_triggers = {"switch", "switch tenant", "change business", "switch business", "other business"}
+    if not stripped.startswith("#") and low not in bare_triggers:
         return False
 
-    code = stripped[1:].strip().lower()
+    code = stripped[1:].strip().lower() if stripped.startswith("#") else ""
     tenants = await db.tenants.find({"is_active": True}).to_list(None)
 
-    # '#switch' / '#help' / unknown -> list the available codes
+    # '#switch' / 'switch' / '#help' / unknown -> list the available businesses
     def _code_of(t):
         return (t.get("switch_code") or t["tenant_id"]).lower()
 
     if not code or code in ("switch", "help", "tenants"):
-        opts = "\n".join(f"• #{_code_of(t)} → {t['name']}" for t in tenants)
+        shown = tenants[:6]
+        opts = "\n".join(f"• {t['name']} — reply *#{_code_of(t)}*" for t in shown)
+        more = "" if len(tenants) <= 6 else f"\n…and {len(tenants) - 6} more — reply with a business name."
         await send_text_message(phone_number_id, customer_phone,
-            f"Switch which business you're chatting with:\n{opts}")
+            f"Which business would you like to chat with?\n{opts}{more}")
         return True
 
     match = next((t for t in tenants if _code_of(t) == code
