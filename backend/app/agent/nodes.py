@@ -282,6 +282,13 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
     media_url = media_type = media_filename = None
 
     if msg.tool_calls:
+        # Files already sent earlier in this conversation (to avoid re-sending)
+        already_sent = {
+            m.get("media_url")
+            for m in (state.get("chat_history") or [])
+            if m.get("direction") == "OUTBOUND" and m.get("media_url")
+        }
+
         # Record the assistant's tool-call turn, then a tool result per call
         messages.append({
             "role": "assistant", "content": msg.content or "",
@@ -321,12 +328,22 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
                 logger.info(f"[TOOL] search_catalog({desc!r}) -> Chroma catalog (image+data)")
                 item = search_catalog(desc, state["tenant_id"])
                 if item and item.get("image_url"):
-                    media_url = item["image_url"]
-                    media_type = "DOCUMENT" if media_url.lower().endswith(".pdf") else "IMAGE"
-                    if media_type == "DOCUMENT":
-                        media_filename = f"{item['name'].replace(' ', '_')}.pdf"
-                    logger.info(f"[CATALOG] matched {item['name']!r} -> {media_url}")
-                    result = {"found": True, "name": item["name"], "price": item["price"], "details": item["details"]}
+                    if item["image_url"] in already_sent:
+                        # Already shown this exact piece — acknowledge, don't resend, offer catalog
+                        logger.info(f"[CATALOG] {item['name']!r} already shown -> acknowledge + offer catalog")
+                        result = {
+                            "found": True, "already_shown": True, "name": item["name"],
+                            "note": (f"You ALREADY showed the {item['name']} earlier in this chat. Do NOT resend the image. "
+                                     f"Tell the customer that, as you showed them, the {item['name']} is the piece you have "
+                                     "in that style, then warmly offer the full *catalog* to explore the complete range."),
+                        }
+                    else:
+                        media_url = item["image_url"]
+                        media_type = "DOCUMENT" if media_url.lower().endswith(".pdf") else "IMAGE"
+                        if media_type == "DOCUMENT":
+                            media_filename = f"{item['name'].replace(' ', '_')}.pdf"
+                        logger.info(f"[CATALOG] matched {item['name']!r} -> {media_url}")
+                        result = {"found": True, "name": item["name"], "price": item["price"], "details": item["details"]}
                 else:
                     logger.info("[CATALOG] no match")
                     result = {"found": False, "note": "No matching product; offer the full catalog or ask for detail."}
