@@ -294,8 +294,10 @@ function CatalogTab({ tenantId }) {
           <Field label="Description" hint="leave blank to auto-generate from the image"
             value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Italian leather, walnut frame…" className="mt-3" />
           <div className="mt-3">
-            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Product image</label>
-            <input type="file" accept="image/*" onChange={(e) => setForm({ ...form, file: e.target.files[0] })}
+            <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">
+              Product image <span className="normal-case font-normal text-faint/80 tracking-normal">· JPG/PNG — a PDF goes in Media</span>
+            </label>
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setForm({ ...form, file: e.target.files[0] })}
               className="block mt-1.5 w-full text-[12.5px] text-muted file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink file:text-[12px] file:cursor-pointer" />
           </div>
           {msg && <div className={`text-[12px] mt-3 ${msg.ok ? "accent-text" : "text-alert"}`}>{msg.ok || msg.err}</div>}
