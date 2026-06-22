@@ -12,7 +12,7 @@ from app.agent.graph import agent_graph
 from app.agent.state import AgentState
 from app.config import settings
 from app.db.mongodb import get_db
-from app.whatsapp.client import verify_webhook_signature
+from app.whatsapp.client import verify_webhook_signature, send_text_message
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,31 +60,82 @@ def _extract_message(payload: dict) -> dict | None:
         return None
 
 
-async def _resolve_tenant(db, customer_phone: str, phone_number_id: str) -> str | None:
+def _tenant_signals(tenant: dict) -> set[str]:
+    """The words that confidently point at this tenant: its media-library keywords,
+    its switch_code, and the distinctive words in its name."""
+    signals = {k.lower() for k in (tenant.get("media_library") or {}).keys()}
+    if tenant.get("switch_code"):
+        signals.add(tenant["switch_code"].lower())
+    for w in tenant["name"].lower().replace("-", " ").replace("/", " ").split():
+        if len(w) >= 4:  # skip 'the', 'and', etc.
+            signals.add(w)
+    return {s for s in signals if len(s) >= 3}
+
+
+def _keyword_match(text: str, tenants: list[dict]) -> str | None:
     """
-    Decide which tenant a customer belongs to (one shared number can serve many tenants).
+    Auto-guess the tenant from the customer's words. A tenant 'matches' if any of its
+    signals appears in the message. We only return a tenant when EXACTLY ONE matches
+    (confident). Shared words (e.g. 'price') or greetings ('hi') match 0 or 2+ -> None,
+    which tells the caller to ask the customer which business they want.
+    """
+    t = (text or "").lower()
+    if not t.strip():
+        return None
+    matched = {tn["tenant_id"] for tn in tenants if any(s in t for s in _tenant_signals(tn))}
+    return next(iter(matched)) if len(matched) == 1 else None
+
+
+async def _resolve_or_triage(db, customer_phone: str, phone_number_id: str, text: str):
+    """
+    Decide which tenant a customer belongs to. Returns (tenant_id, ask_reply).
+    Exactly one of the two is set:
+      - tenant_id set  -> route the message to that tenant
+      - ask_reply set  -> we couldn't tell; send this 'which business?' menu instead
+
     Priority:
-      1. Explicit routing assignment for this customer (customer_routing collection)
-      2. An existing session for this customer (sticky to whatever tenant they're already in)
-      3. The tenant that owns this business number (production: 1 number = 1 tenant)
-      4. First active tenant (last-resort default)
+      1. Explicit routing assignment (customer_routing)            -> tenant_id
+      2. Existing session (sticky to their current tenant)         -> tenant_id
+      3. A number that uniquely belongs to one tenant (production) -> tenant_id
+      4. Shared number + only one tenant exists                    -> tenant_id
+      5. Shared number, unassigned: auto-guess from media words    -> tenant_id (confident)
+         ...otherwise ask which business                          -> ask_reply
     """
     route = await db.customer_routing.find_one({"customer_phone": customer_phone})
     if route:
-        return route["tenant_id"]
+        return route["tenant_id"], None
 
     existing = await db.chat_sessions.find_one(
         {"customer_phone": customer_phone}, sort=[("last_message_at", -1)]
     )
     if existing:
-        return existing["tenant_id"]
+        return existing["tenant_id"], None
 
-    by_number = await db.tenants.find_one({"whatsapp_phone_number_id": phone_number_id})
-    if by_number:
-        return by_number["tenant_id"]
+    owners = await db.tenants.find(
+        {"whatsapp_phone_number_id": phone_number_id, "is_active": True}
+    ).to_list(None)
+    if len(owners) == 1:  # this number is dedicated to one tenant -> deterministic
+        return owners[0]["tenant_id"], None
 
-    first = await db.tenants.find_one({"is_active": True})
-    return first["tenant_id"] if first else None
+    # Shared (or unowned) number: triage among the candidate tenants.
+    candidates = owners or await db.tenants.find({"is_active": True}).to_list(None)
+    if not candidates:
+        return None, None
+    if len(candidates) == 1:
+        return candidates[0]["tenant_id"], None
+
+    guess = _keyword_match(text, candidates)
+    if guess:
+        logger.info(f"[TRIAGE] auto-routed unassigned customer to {guess} from message keywords")
+        return guess, None
+
+    # Not confident -> ask the customer which business they want.
+    options = "\n".join(f"• {c['name']}" for c in candidates)
+    reply = (
+        "Hi! 👋 Thanks for reaching out. Which business would you like to chat with today?\n\n"
+        f"{options}\n\nJust reply with the name (or tell me what you need, e.g. a *sofa* or an *oil change*)."
+    )
+    return None, reply
 
 
 async def _handle_switch_command(db, text: str, customer_phone: str, phone_number_id: str) -> bool:
@@ -246,8 +297,14 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     ):
         return Response(status_code=200)
 
-    # Resolve which TENANT this customer belongs to.
-    tenant_id = await _resolve_tenant(db, message_data["customer_phone"], message_data["phone_number_id"])
+    # Resolve which TENANT this customer belongs to (or ask them, if we can't tell).
+    tenant_id, ask_reply = await _resolve_or_triage(
+        db, message_data["customer_phone"], message_data["phone_number_id"], message_data["text"]
+    )
+    if ask_reply:
+        # Unassigned customer on a shared number, message not confident enough to route.
+        await send_text_message(message_data["phone_number_id"], message_data["customer_phone"], ask_reply)
+        return Response(status_code=200)
     if not tenant_id:
         logger.warning("No tenant could be resolved — ignoring")
         return Response(status_code=200)

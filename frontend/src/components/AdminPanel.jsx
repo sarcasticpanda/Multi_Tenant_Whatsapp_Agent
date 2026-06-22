@@ -415,10 +415,37 @@ function KnowledgeTab({ tenantId }) {
 
 /* ------------------------------- Settings ------------------------------- */
 function SettingsTab({ tenant }) {
-  const [prompt, setPrompt] = useState(tenant.system_prompt || "");
-  const [name, setName] = useState(tenant.name || "");
+  // The list passed in is minimal (id/name only). Load the FULL tenant so the
+  // prompt / phone_number_id aren't blank — saving a blank would wipe them.
+  const [loaded, setLoaded] = useState(false);
+  const [name, setName] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [phoneId, setPhoneId] = useState("");
   const [saved, setSaved] = useState(false);
-  const save = async () => { await api.updateTenant(tenant.tenant_id, { name, system_prompt: prompt }); setSaved(true); setTimeout(() => setSaved(false), 2000); };
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.adminTenants().then((d) => {
+      const full = d.tenants.find((t) => t.tenant_id === tenant.tenant_id);
+      if (!alive || !full) return;
+      setName(full.name || "");
+      setPrompt(full.system_prompt || "");
+      setPhoneId(full.whatsapp_phone_number_id || "");
+      setLoaded(true);
+    }).catch(console.error);
+    return () => { alive = false; };
+  }, [tenant.tenant_id]);
+
+  const save = async () => {
+    if (!prompt.trim()) { setErr("System prompt can't be empty — the bot needs it to know how to answer."); return; }
+    setErr(null);
+    await api.updateTenant(tenant.tenant_id, { name, system_prompt: prompt, whatsapp_phone_number_id: phoneId.trim() });
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+
+  if (!loaded) return <div className="text-[13px] text-faint">Loading settings…</div>;
+
   return (
     <div className="max-w-3xl">
       <Field label="Brand name" value={name} onChange={setName} />
@@ -427,11 +454,17 @@ function SettingsTab({ tenant }) {
         <textarea rows={12} value={prompt} onChange={(e) => setPrompt(e.target.value)}
           className="w-full mt-1 text-[13px] font-mono leading-relaxed border border-hair rounded-lg p-3 focus:outline-none focus:border-brand resize-none" />
       </div>
+      <div className="mt-4">
+        <Field label="WhatsApp phone_number_id (this tenant's own number — leave shared for the test number)"
+          value={phoneId} onChange={setPhoneId} placeholder="e.g. 1095181447021644" />
+        <p className="text-[11px] text-faint mt-1">Give a tenant its own WhatsApp number's id here and inbound messages to that number route to this tenant automatically — no manual assignment needed.</p>
+      </div>
+      {err && <div className="text-[12px] text-alert mt-3">{err}</div>}
       <div className="flex items-center gap-3 mt-3">
         <button onClick={save} className="accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg">Save changes</button>
         {saved && <span className="text-[12px] accent-text">Saved</span>}
       </div>
-      <p className="text-[11px] text-faint mt-3 font-mono">phone_number_id: {tenant.whatsapp_phone_number_id} · tenant_id: {tenant.tenant_id}</p>
+      <p className="text-[11px] text-faint mt-3 font-mono">tenant_id: {tenant.tenant_id}</p>
     </div>
   );
 }
