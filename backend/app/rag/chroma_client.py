@@ -64,18 +64,17 @@ async def build_chroma_index():
 
 
 def get_chroma_collection():
-    if _collection is None:
-        raise RuntimeError("Chroma not initialised. Call build_chroma_index() at startup.")
-    return _collection
+    return _collection  # may be None while the background index build is in progress
 
 
 def search_knowledge_base(query: str, tenant_id: str, n_results: int = 3) -> list[str]:
     """
     Semantic search over KNOWLEDGE docs (FAQs, policies, pricing text), tenant-scoped.
     Returns text chunks for the LLM to answer factual questions.
+    Returns [] if the index isn't ready yet (bot still replies from system prompt).
     """
     collection = get_chroma_collection()
-    if collection.count() == 0:
+    if collection is None or collection.count() == 0:
         return []
 
     results = collection.query(
@@ -101,7 +100,7 @@ def search_catalog(query: str, tenant_id: str) -> dict | None:
     fetches the right product image AND its data together.
     """
     collection = get_chroma_collection()
-    if collection.count() == 0:
+    if collection is None or collection.count() == 0:
         return None
 
     results = collection.query(

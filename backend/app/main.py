@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -20,16 +21,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+async def _build_index_bg():
+    """Build the RAG index after startup so it never blocks the port/health check."""
+    try:
+        await build_chroma_index()
+        logger.info("RAG index ready.")
+    except Exception as e:
+        logger.error(f"RAG index build failed (bot still serves, RAG degraded): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — keep this FAST so the port binds and /health responds immediately.
     logger.info("Starting up...")
     await connect_mongodb()
     await seed_tenants_if_empty()
     await seed_knowledge_if_empty()
     await seed_catalog_if_empty()
-    await build_chroma_index()
-    logger.info("All systems ready.")
+    # Build the (heavier) Chroma index in the BACKGROUND — non-blocking.
+    asyncio.create_task(_build_index_bg())
+    logger.info("Core ready; RAG index building in background.")
     yield
     # Shutdown
     await close_mongodb()
