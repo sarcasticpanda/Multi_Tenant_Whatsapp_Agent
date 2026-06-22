@@ -78,7 +78,71 @@ function Directory({ tenants, onManage, onChanged }) {
             );
           })}
         </div>
+
+        <RoutingPanel tenants={tenants} />
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------- Customer routing ---------------------------- */
+function RoutingPanel({ tenants }) {
+  const [routes, setRoutes] = useState([]);
+  const [phone, setPhone] = useState("");
+  const [tenantId, setTenantId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const load = useCallback(() => { api.routing().then((d) => setRoutes(d.routes)).catch(console.error); }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!tenantId && tenants[0]) setTenantId(tenants[0].tenant_id); }, [tenants, tenantId]);
+
+  const assign = async () => {
+    if (!phone || !tenantId) { setMsg({ err: "Enter a customer number and pick a tenant" }); return; }
+    setBusy(true); setMsg(null);
+    try { await api.setRoute(phone, tenantId); setPhone(""); setMsg({ ok: "Assigned" }); load(); }
+    catch (e) { setMsg({ err: e.message }); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mt-9 max-w-3xl">
+      <h2 className="font-display text-[17px] font-semibold">Customer routing</h2>
+      <p className="text-[13px] text-muted mt-0.5 mb-4">
+        One shared bot number serves every tenant. A customer's phone number is assigned to exactly one
+        tenant — that decides which brand answers them. (For a one-phone demo, a customer can also text
+        <span className="font-mono"> #furniture</span> / <span className="font-mono">#autocare</span> to switch.)
+      </p>
+
+      <div className="bg-surface border border-hair rounded-xl divide-y divide-hair mb-4">
+        {routes.map((r) => {
+          const th = themeFor(r.tenant_id);
+          return (
+            <div key={r.customer_phone} className="flex items-center gap-3 px-4 py-2.5">
+              <span className="font-mono text-[13px] text-ink">{r.customer_phone}</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9AA4B0" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <span className="inline-flex items-center gap-1.5 text-[12px]">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: th.accent }} />{r.tenant_name}
+              </span>
+              <button onClick={async () => { await api.deleteRoute(r.customer_phone); load(); }}
+                className="ml-auto text-faint hover:text-alert text-[12px]">Unassign</button>
+            </div>
+          );
+        })}
+        {routes.length === 0 && <div className="px-4 py-3 text-[13px] text-faint">No explicit assignments yet — new customers stick to the first tenant or the number's owner.</div>}
+      </div>
+
+      <div className="bg-surface border border-hair rounded-xl p-4 flex items-end gap-3">
+        <div className="flex-1"><Field label="Customer number" value={phone} onChange={setPhone} placeholder="919876543210" /></div>
+        <div className="flex-1">
+          <label className="text-[11px] font-semibold text-faint uppercase tracking-wider">Tenant</label>
+          <select value={tenantId} onChange={(e) => setTenantId(e.target.value)}
+            className="w-full mt-1 text-[13px] border border-hair rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-brand">
+            {tenants.map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.name}</option>)}
+          </select>
+        </div>
+        <button onClick={assign} disabled={busy} className="accent-bg text-white text-[13px] font-medium px-4 py-2 rounded-lg disabled:opacity-40">{busy ? "Saving…" : "Assign"}</button>
+      </div>
+      {msg && <div className={`text-[12px] mt-2 ${msg.ok ? "accent-text" : "text-alert"}`}>{msg.ok || msg.err}</div>}
     </div>
   );
 }

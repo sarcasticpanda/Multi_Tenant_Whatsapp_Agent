@@ -29,6 +29,7 @@ TENANT_A = {
         "- Don't repeat the same greeting every message — you remember the conversation."
     ),
     "whatsapp_phone_number_id": settings.meta_phone_number_id,
+    "switch_code": "furniture",
     "media_library": {
         "catalog": f"{settings.app_base_url}/static/furniture_catalog.pdf",
         "brochure": f"{settings.app_base_url}/static/furniture_catalog.pdf",
@@ -64,6 +65,7 @@ TENANT_B = {
         "- Don't re-introduce yourself every message — keep the conversation flowing naturally."
     ),
     "whatsapp_phone_number_id": settings.meta_phone_number_id,
+    "switch_code": "autocare",
     "media_library": {
         "invoice": f"{settings.app_base_url}/static/invoice_template.pdf",
         "repair diagram": f"{settings.app_base_url}/static/repair_diagram.jpg",
@@ -101,6 +103,9 @@ async def ensure_indexes() -> None:
 
     # Idempotency: unique index so a given inbound WhatsApp message is processed once.
     await db.processed_webhooks.create_index("whatsapp_message_id", unique=True)
+
+    # Routing: one customer phone is assigned to exactly one tenant.
+    await db.customer_routing.create_index("customer_phone", unique=True)
     print("Ensured all MongoDB indexes")
 
 
@@ -113,3 +118,9 @@ async def seed_tenants_if_empty() -> None:
         print("Seeded Tenant A (Luxury Furniture) and Tenant B (AutoCare)")
     else:
         print(f"Tenants already seeded ({count} found)")
+        # Backfill switch_code for the two demo tenants if missing (older seeds)
+        for tid, code in (("tenant_a", "furniture"), ("tenant_b", "autocare")):
+            await db.tenants.update_one(
+                {"tenant_id": tid, "switch_code": {"$exists": False}},
+                {"$set": {"switch_code": code}},
+            )

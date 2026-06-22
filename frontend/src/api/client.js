@@ -71,6 +71,11 @@ export const api = {
   setSessionStatus: (sid, status) => send(`/api/sessions/${sid}/status`, "POST", { status }),
   broadcast: (p) => send("/api/broadcast", "POST", p),
 
+  // admin — customer routing (phone -> tenant)
+  routing: () => get("/api/admin/routing"),
+  setRoute: (customer_phone, tenant_id) => send("/api/admin/routing", "POST", { customer_phone, tenant_id }),
+  deleteRoute: (phone) => send(`/api/admin/routing/${encodeURIComponent(phone)}`, "DELETE"),
+
   // admin — tenants
   adminTenants: () => get("/api/admin/tenants"),
   createTenant: (p) => send("/api/admin/tenants", "POST", p),

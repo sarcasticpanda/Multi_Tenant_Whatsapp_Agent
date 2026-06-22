@@ -77,6 +77,50 @@ async def admin_delete_tenant(tenant_id: str):
 
 
 # --------------------------------------------------------------------------- #
+# Customer routing (customer phone -> tenant)
+# --------------------------------------------------------------------------- #
+
+class RouteIn(BaseModel):
+    customer_phone: str
+    tenant_id: str
+
+
+@router.get("/routing")
+async def admin_list_routing():
+    """All customer -> tenant assignments, with tenant name for display."""
+    db = get_db()
+    routes = await db.customer_routing.find({}, {"_id": 0}).to_list(None)
+    names = {t["tenant_id"]: t["name"] for t in await db.tenants.find({}, {"_id": 0, "tenant_id": 1, "name": 1}).to_list(None)}
+    for r in routes:
+        r["tenant_name"] = names.get(r["tenant_id"], r["tenant_id"])
+    return {"routes": routes}
+
+
+@router.post("/routing")
+async def admin_set_route(body: RouteIn):
+    """Assign (or reassign) a customer phone to a tenant."""
+    db = get_db()
+    phone = body.customer_phone.strip().lstrip("+").replace(" ", "")
+    if not phone:
+        raise HTTPException(400, "customer_phone is required")
+    if not await db.tenants.find_one({"tenant_id": body.tenant_id}):
+        raise HTTPException(404, "Tenant not found")
+    await db.customer_routing.update_one(
+        {"customer_phone": phone},
+        {"$set": {"customer_phone": phone, "tenant_id": body.tenant_id}},
+        upsert=True,
+    )
+    return {"ok": True, "customer_phone": phone, "tenant_id": body.tenant_id}
+
+
+@router.delete("/routing/{customer_phone}")
+async def admin_delete_route(customer_phone: str):
+    db = get_db()
+    await db.customer_routing.delete_one({"customer_phone": customer_phone.lstrip("+")})
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
 # Media library (keyword -> uploaded file URL)
 # --------------------------------------------------------------------------- #
 

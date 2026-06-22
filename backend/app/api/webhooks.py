@@ -60,6 +60,80 @@ def _extract_message(payload: dict) -> dict | None:
         return None
 
 
+async def _resolve_tenant(db, customer_phone: str, phone_number_id: str) -> str | None:
+    """
+    Decide which tenant a customer belongs to (one shared number can serve many tenants).
+    Priority:
+      1. Explicit routing assignment for this customer (customer_routing collection)
+      2. An existing session for this customer (sticky to whatever tenant they're already in)
+      3. The tenant that owns this business number (production: 1 number = 1 tenant)
+      4. First active tenant (last-resort default)
+    """
+    route = await db.customer_routing.find_one({"customer_phone": customer_phone})
+    if route:
+        return route["tenant_id"]
+
+    existing = await db.chat_sessions.find_one(
+        {"customer_phone": customer_phone}, sort=[("last_message_at", -1)]
+    )
+    if existing:
+        return existing["tenant_id"]
+
+    by_number = await db.tenants.find_one({"whatsapp_phone_number_id": phone_number_id})
+    if by_number:
+        return by_number["tenant_id"]
+
+    first = await db.tenants.find_one({"is_active": True})
+    return first["tenant_id"] if first else None
+
+
+async def _handle_switch_command(db, text: str, customer_phone: str, phone_number_id: str) -> bool:
+    """
+    Optional convenience for demos: one customer phone can flip between tenants by
+    texting a '#code' command (e.g. '#furniture', '#autocare'). In production each
+    tenant has its own number, so this is purely a one-phone helper.
+
+    Returns True if the message was a switch command (handled here, skip the agent).
+    """
+    from app.whatsapp.client import send_text_message
+
+    stripped = (text or "").strip()
+    if not stripped.startswith("#"):
+        return False
+
+    code = stripped[1:].strip().lower()
+    tenants = await db.tenants.find({"is_active": True}).to_list(None)
+
+    # '#switch' / '#help' / unknown -> list the available codes
+    def _code_of(t):
+        return (t.get("switch_code") or t["tenant_id"]).lower()
+
+    if not code or code in ("switch", "help", "tenants"):
+        opts = "\n".join(f"• #{_code_of(t)} → {t['name']}" for t in tenants)
+        await send_text_message(phone_number_id, customer_phone,
+            f"Switch which business you're chatting with:\n{opts}")
+        return True
+
+    match = next((t for t in tenants if _code_of(t) == code
+                  or t["tenant_id"].lower() == code
+                  or code in t["name"].lower()), None)
+    if not match:
+        await send_text_message(phone_number_id, customer_phone,
+            f"Sorry, I don't recognise '#{code}'. Text *#switch* to see the options.")
+        return True
+
+    await db.customer_routing.update_one(
+        {"customer_phone": customer_phone},
+        {"$set": {"customer_phone": customer_phone, "tenant_id": match["tenant_id"]}},
+        upsert=True,
+    )
+    # Make sure a session exists so the conversation appears in that tenant's dashboard
+    await _get_or_create_session(match["tenant_id"], customer_phone)
+    await send_text_message(phone_number_id, customer_phone,
+        f"You're now chatting with *{match['name']}*. How can we help? 😊")
+    return True
+
+
 async def _get_or_create_session(tenant_id: str, customer_phone: str) -> dict:
     """Atomic get-or-create. Avoids a find-then-insert race on concurrent inbound messages."""
     db = get_db()
@@ -166,15 +240,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.info(f"Duplicate webhook for {message_data['message_id']} — already processed, skipping")
         return Response(status_code=200)
 
-    # Find tenant by phone_number_id
-    tenant = await db.tenants.find_one(
-        {"whatsapp_phone_number_id": message_data["phone_number_id"]}
-    )
-    if not tenant:
-        logger.warning(f"No tenant for phone_number_id {message_data['phone_number_id']}")
+    # Optional one-phone helper: '#code' switches which tenant this customer talks to.
+    if await _handle_switch_command(
+        db, message_data["text"], message_data["customer_phone"], message_data["phone_number_id"]
+    ):
         return Response(status_code=200)
 
-    tenant_id = tenant["tenant_id"]
+    # Resolve which TENANT this customer belongs to.
+    tenant_id = await _resolve_tenant(db, message_data["customer_phone"], message_data["phone_number_id"])
+    if not tenant_id:
+        logger.warning("No tenant could be resolved — ignoring")
+        return Response(status_code=200)
 
     # Get or create session
     session = await _get_or_create_session(tenant_id, message_data["customer_phone"])
