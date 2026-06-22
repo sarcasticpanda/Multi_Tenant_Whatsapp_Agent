@@ -16,6 +16,7 @@ class AgentState(TypedDict):
     tenant_config: Optional[dict]
     chat_history: Optional[list]
     rag_chunks: Optional[list]
+    catalog_names: Optional[list]         # full catalog inventory (names) for honesty
 
     # LLM output (Node 3)
     llm_reply: Optional[str]

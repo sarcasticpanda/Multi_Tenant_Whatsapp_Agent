@@ -145,6 +145,12 @@ async def context_retriever_node(state: AgentState) -> AgentState:
         return state
     state["tenant_config"] = tenant
 
+    # Catalog inventory (names) so the bot is HONEST about what actually exists
+    cat = await db.catalog_items.find(
+        {"tenant_id": state["tenant_id"], "is_active": True}, {"name": 1}
+    ).to_list(None)
+    state["catalog_names"] = [c["name"] for c in cat]
+
     # Last 5 messages (oldest first)
     msgs = await db.message_audit_log.find(
         {"session_id": state["session_id"]}
@@ -218,8 +224,23 @@ async def context_retriever_node(state: AgentState) -> AgentState:
 # Node 3: LLM Reasoning
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(tenant: dict, rag_chunks: list) -> str:
+def _build_system_prompt(tenant: dict, rag_chunks: list, catalog_names: list | None = None) -> str:
     prompt = tenant["system_prompt"]
+
+    # Tell the LLM the EXACT catalog inventory so it's HONEST and never
+    # presents an unrelated item as a "similar" option.
+    if catalog_names:
+        prompt += "\n\n--- YOUR COMPLETE CATALOG (the ONLY products you have) ---\n"
+        for n in catalog_names:
+            prompt += f"- {n}\n"
+        prompt += (
+            "These are the ONLY products you offer. Never invent products or imply you have items "
+            "not on this list. If a customer asks for 'more' of a type and you only have the one you've "
+            "already shown, say so honestly (e.g. 'that's the only sofa we have in that style right now') "
+            "and offer to send the full *catalog* to browse everything. Do NOT present an unrelated product "
+            "(like a bed) as similar to what they asked for (like a sofa).\n"
+            "--- END CATALOG ---\n"
+        )
 
     # Tell the LLM EXACTLY what media files exist so it never promises
     # or re-sends something it doesn't have.
@@ -263,7 +284,7 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         return state
 
     tenant = state["tenant_config"]
-    system_prompt = _build_system_prompt(tenant, state.get("rag_chunks") or [])
+    system_prompt = _build_system_prompt(tenant, state.get("rag_chunks") or [], state.get("catalog_names"))
 
     # Build OpenAI-style message list: system + last-5 history + current
     messages = [{"role": "system", "content": system_prompt}]
