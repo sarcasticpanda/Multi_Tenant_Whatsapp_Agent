@@ -1,3 +1,9 @@
+# Internal docs & assignment material — never publish
+docs/
+PROJECT_STATE.md
+Assignment_*.pdf
+sample_furniture_catalog.pdf
+
 # Environment
 .env
 backend/venv/
