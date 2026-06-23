@@ -271,6 +271,7 @@ function CatalogTab({ tenantId }) {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", price: "", description: "", file: null });
   const [msg, setMsg] = useState(null);
+  const [ingestTrigger, setIngestTrigger] = useState(0);
 
   const load = useCallback(() => { api.catalog(tenantId).then((d) => setItems(d.items)).catch(console.error); }, [tenantId]);
   useEffect(() => { load(); }, [load]);
@@ -307,7 +308,8 @@ function CatalogTab({ tenantId }) {
         </SidebarCard>
       }
     >
-      <PdfImport tenantId={tenantId} onDone={load} />
+      <PdfImport tenantId={tenantId} onDone={load} onStarted={() => setIngestTrigger((t) => t + 1)} />
+      <IngestProgress tenantId={tenantId} trigger={ingestTrigger} onDone={load} />
       {items.length === 0 ? (
         <EmptyState icon="box" title="No products yet" hint="Import a catalog PDF above, or add your first product on the right." />
       ) : (
@@ -334,18 +336,16 @@ function CatalogTab({ tenantId }) {
   );
 }
 
-function PdfImport({ tenantId, onDone }) {
+function PdfImport({ tenantId, onDone, onStarted }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const onPick = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setBusy(true); setResult(null);
     try {
-      const r = await api.ingestPdf(tenantId, file);
-      setResult({ ok: true, ...r });
-      onDone?.();
-      // Indexing runs in the background — refresh a few times so items appear as ready.
-      [4000, 10000, 20000, 35000].forEach((ms) => setTimeout(() => onDone?.(), ms));
+      await api.ingestPdf(tenantId, file);
+      setResult(null);
+      onStarted?.();   // hand off to the live progress indicator
     } catch (err) { setResult({ ok: false, error: err.message }); }
     finally { setBusy(false); e.target.value = ""; }
   };
@@ -378,6 +378,7 @@ function MediaTab({ tenantId }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [ingestTrigger, setIngestTrigger] = useState(0);
   const load = useCallback(() => { api.adminTenants().then((d) => setTenant(d.tenants.find((t) => t.tenant_id === tenantId))).catch(console.error); }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
@@ -388,8 +389,7 @@ function MediaTab({ tenantId }) {
     try {
       await api.addMedia(tenantId, keyword, file);
       setKeyword(""); setFile(null); load();
-      setMsg(wasPdf ? "Added. Reading the PDF's text + images in the background — searchable shortly." : "Added.");
-      if (wasPdf) [5000, 12000, 25000].forEach((ms) => setTimeout(load, ms));
+      if (wasPdf) setIngestTrigger((t) => t + 1); else setMsg("Added.");
     } catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
   const lib = tenant?.media_library || {};
@@ -412,6 +412,7 @@ function MediaTab({ tenantId }) {
         </SidebarCard>
       }
     >
+      <IngestProgress tenantId={tenantId} trigger={ingestTrigger} onDone={load} />
       {Object.keys(lib).length === 0 ? (
         <EmptyState icon="file" title="No files yet" hint="Add a file on the right and give it a keyword the agent can match." />
       ) : (
@@ -633,6 +634,84 @@ function TabLayout({ intro, count, countLabel, countPlural, aside, children }) {
         <div className="flex-1 min-w-0">{children}</div>
         <aside className="w-[330px] shrink-0 sticky top-0">{aside}</aside>
       </div>
+    </div>
+  );
+}
+
+const PHASE_LABEL = {
+  starting: "Starting…",
+  images: "Extracting product images…",
+  text: "Reading & chunking text…",
+  indexing: "Building the search index…",
+  done: "Done",
+};
+
+// Live, animated ingestion progress — polls the server while a PDF is being indexed.
+function IngestProgress({ tenantId, trigger, onDone }) {
+  const [job, setJob] = useState(null);
+  useEffect(() => {
+    if (!trigger) return;
+    let alive = true, doneSeen = false, extra = 0;
+    setJob({ status: "processing", phase: "starting", items_created: 0, text_chunks: 0, images_found: 0 });
+    const tick = async () => {
+      try {
+        const { job } = await api.ingestStatus(tenantId);
+        if (!alive || !job) return;
+        setJob(job);
+        if (job.status === "done" || job.status === "error") {
+          if (!doneSeen) { doneSeen = true; onDone?.(); }
+          extra += 1;
+          if (extra >= 2) { clearInterval(id); setTimeout(() => { if (alive) setJob(null); }, 5000); }
+        }
+      } catch { /* keep polling */ }
+    };
+    const id = setInterval(tick, 1500);
+    tick();
+    return () => { alive = false; clearInterval(id); };
+  }, [trigger, tenantId]);
+
+  if (!job) return null;
+  const done = job.status === "done";
+  const error = job.status === "error";
+  const pct = job.images_found > 0 ? Math.min(100, Math.round((job.items_created / job.images_found) * 100)) : null;
+
+  return (
+    <div className={`rounded-xl p-4 mb-5 border ${error ? "bg-alert/8 border-alert/25" : "bg-brand-soft/60 border-brand/20"}`}>
+      <div className="flex items-center gap-3">
+        {error ? (
+          <span className="w-8 h-8 rounded-lg bg-alert/15 flex items-center justify-center shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C4543F" strokeWidth="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </span>
+        ) : done ? (
+          <span className="w-8 h-8 rounded-lg bg-brand-soft flex items-center justify-center shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B5C4E" strokeWidth="2.4"><path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </span>
+        ) : (
+          <svg className="w-8 h-8 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#0B5C4E" strokeOpacity="0.2" strokeWidth="3"/>
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="#0B5C4E" strokeWidth="3" strokeLinecap="round"/>
+          </svg>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="font-display font-semibold text-[14px] text-brand-deep truncate">
+            {error ? "Indexing failed" : done ? `Indexed “${job.filename}”` : `Indexing “${job.filename}”`}
+          </div>
+          <div className="text-[12px] text-muted">
+            {error ? (job.error || "Something went wrong.") : (
+              <>
+                {PHASE_LABEL[job.phase] || "Working…"} · <b className="text-ink font-mono">{job.items_created}</b> product{job.items_created === 1 ? "" : "s"}
+                {" · "}<b className="text-ink font-mono">{job.text_chunks}</b> text chunk{job.text_chunks === 1 ? "" : "s"}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      {!error && (
+        <div className="mt-3 h-1.5 rounded-full bg-brand/10 overflow-hidden">
+          <div className={`h-full rounded-full bg-brand-deep transition-all duration-700 ${done ? "" : "animate-pulse"}`}
+            style={{ width: done ? "100%" : pct != null ? `${Math.max(8, pct)}%` : "40%" }} />
+        </div>
+      )}
     </div>
   );
 }

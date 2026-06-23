@@ -27,15 +27,31 @@ async def _cleanup_files_bg(urls: list[str]) -> None:
         await _delete_gridfs_if_owned(url)
 
 
-async def _ingest_pdf_bg(tenant_id: str, data: bytes, filename: str) -> None:
+async def _start_ingest_job(tenant_id: str, filename: str) -> str:
+    """Create a live progress record the dashboard can poll while indexing runs."""
+    job_id = str(uuid4())
+    await get_db().ingest_jobs.insert_one({
+        "job_id": job_id, "tenant_id": tenant_id, "filename": filename,
+        "status": "processing", "phase": "starting",
+        "images_found": 0, "items_created": 0, "text_chunks": 0,
+        "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
+    })
+    return job_id
+
+
+async def _ingest_pdf_bg(tenant_id: str, data: bytes, filename: str, job_id: str) -> None:
     """Run the (potentially slow) PDF ingestion off the request so the upload returns
     immediately and large catalogs don't hang the dashboard or block webhooks."""
     try:
         from app.rag.pdf_extractor import ingest_pdf_full
-        result = await ingest_pdf_full(tenant_id, data, filename)
+        result = await ingest_pdf_full(tenant_id, data, filename, job_id=job_id)
         logger.info(f"[INGEST] {filename}: {result}")
     except Exception as e:
         logger.error(f"Background PDF ingest failed for {filename}: {e}", exc_info=True)
+        await get_db().ingest_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "error", "error": str(e)[:200], "updated_at": datetime.utcnow()}},
+        )
 
 
 async def _delete_gridfs_if_owned(url: str) -> None:
@@ -180,10 +196,12 @@ async def admin_add_media(
     ctype = (file.content_type or "").lower()
     fname = (file.filename or "").lower()
     indexing = "pdf" in ctype or fname.endswith(".pdf")
+    job_id = None
     if indexing:
-        background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename)
+        job_id = await _start_ingest_job(tenant_id, file.filename)
+        background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename, job_id)
 
-    return {"ok": True, "keyword": keyword.lower(), "url": url, "indexing": indexing}
+    return {"ok": True, "keyword": keyword.lower(), "url": url, "indexing": indexing, "job_id": job_id}
 
 
 @router.delete("/tenants/{tenant_id}/media/{keyword}")
@@ -283,9 +301,24 @@ async def admin_ingest_catalog_pdf(
     if not await db.tenants.find_one({"tenant_id": tenant_id}):
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
-    background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename)
-    return {"ok": True, "status": "processing",
+    job_id = await _start_ingest_job(tenant_id, file.filename)
+    background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename, job_id)
+    return {"ok": True, "status": "processing", "job_id": job_id,
             "note": "Indexing in the background — products and knowledge will appear shortly."}
+
+
+@router.get("/tenants/{tenant_id}/ingest-status")
+async def admin_ingest_status(tenant_id: str):
+    """Latest PDF-ingestion progress for this tenant (polled by the dashboard)."""
+    db = get_db()
+    job = await db.ingest_jobs.find_one(
+        {"tenant_id": tenant_id}, {"_id": 0}, sort=[("updated_at", -1)]
+    )
+    if job:
+        for k in ("created_at", "updated_at"):
+            if job.get(k):
+                job[k] = job[k].isoformat()
+    return {"job": job}
 
 
 @router.delete("/tenants/{tenant_id}/catalog/by-source")

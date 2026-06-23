@@ -111,6 +111,7 @@ export const api = {
     fd.append("file", file);
     return upload(`/api/admin/tenants/${id}/catalog/from-pdf`, fd);
   },
+  ingestStatus: (id) => get(`/api/admin/tenants/${id}/ingest-status`),
 
   // admin — knowledge
   knowledge: (id) => get(`/api/admin/tenants/${id}/knowledge`),

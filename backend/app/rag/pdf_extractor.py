@@ -22,6 +22,18 @@ from app.rag.chroma_client import build_chroma_index
 logger = logging.getLogger(__name__)
 
 
+async def _set_job(job_id: str | None, **fields) -> None:
+    """Update the live ingestion-progress record the dashboard polls."""
+    if not job_id:
+        return
+    try:
+        await get_db().ingest_jobs.update_one(
+            {"job_id": job_id}, {"$set": {**fields, "updated_at": datetime.utcnow()}}
+        )
+    except Exception:
+        pass
+
+
 def _extract(pdf_bytes: bytes, max_items: int = 60) -> list[dict]:
     """
     Return [{image_bytes, ext, page_number, page_text}] for meaningful product images.
@@ -114,7 +126,7 @@ def _chunk_text(text: str, size: int = 800, overlap: int = 120) -> list[str]:
     return chunks
 
 
-async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True) -> dict:
+async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True, job_id: str | None = None) -> dict:
     """
     DOCUMENT RAG: read a PDF's TEXT (page by page), chunk it, and store each chunk as a
     knowledge_doc so the bot can answer questions about the document's contents.
@@ -124,6 +136,7 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = len(doc)
     base = source_name.rsplit(".", 1)[0][:50]
+    await _set_job(job_id, phase="text", pages=pages)
     created = 0
     for pno in range(pages):
         text = doc[pno].get_text().strip()
@@ -137,23 +150,28 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
                 "created_at": datetime.utcnow(),
             })
             created += 1
+            if created % 15 == 0:
+                await _set_job(job_id, text_chunks=created)
     doc.close()
+    await _set_job(job_id, text_chunks=created)
     if created and rebuild:
         await build_chroma_index()
     note = "" if created else "No selectable text found — this PDF may be scanned images."
     return {"pages": pages, "text_chunks": created, "note": note}
 
 
-async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str) -> dict:
+async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str, job_id: str | None = None) -> dict:
     """
     One upload, BOTH layers integrated:
       • product IMAGES  -> searchable catalog items (so the bot can SHOW them)
       • page TEXT       -> knowledge chunks (so the bot can ANSWER about the contents)
     Rebuilds the RAG index once at the end.
     """
-    cat = await ingest_catalog_pdf(tenant_id, pdf_bytes, source_name, rebuild=False)
-    txt = await ingest_text_pdf(tenant_id, pdf_bytes, source_name, rebuild=False)
+    cat = await ingest_catalog_pdf(tenant_id, pdf_bytes, source_name, rebuild=False, job_id=job_id)
+    txt = await ingest_text_pdf(tenant_id, pdf_bytes, source_name, rebuild=False, job_id=job_id)
+    await _set_job(job_id, phase="indexing")
     await build_chroma_index()
+    await _set_job(job_id, status="done", phase="done")
     return {
         "images_found": cat.get("images_found", 0),
         "items_created": cat.get("items_created", 0),
@@ -162,10 +180,12 @@ async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str) ->
     }
 
 
-async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True) -> dict:
+async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, rebuild: bool = True, job_id: str | None = None) -> dict:
     """Extract product IMAGES -> searchable catalog items. Returns a summary."""
     db = get_db()
+    await _set_job(job_id, phase="images")
     extracted = _extract(pdf_bytes)
+    await _set_job(job_id, images_found=len(extracted))
     if not extracted:
         return {"images_found": 0, "items_created": 0,
                 "note": "No embedded images found. This PDF may be text-only or scanned."}
@@ -190,7 +210,10 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str,
             "is_active": True, "created_at": datetime.utcnow(),
         })
         created += 1
+        if created % 3 == 0:
+            await _set_job(job_id, items_created=created)
 
+    await _set_job(job_id, items_created=created)
     if rebuild:
         await build_chroma_index()  # make all new items searchable
     return {"images_found": len(extracted), "items_created": created}
