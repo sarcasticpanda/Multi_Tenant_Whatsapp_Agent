@@ -26,16 +26,15 @@ own brand persona, knowledge base, media library and catalog, fully isolated. Bu
 |--------|---------|----------|-------|
 | **Luxury Furniture Store** | "Aria" — design concierge | Premium furniture | Catalog PDF, product images, price list |
 | **AutoCare Services** | "Max" — service advisor | Car servicing | Invoice/menu PDF, repair diagram |
+| **Nova Electronics** | "Kai" — tech advisor | Consumer electronics | Product photos, spec sheets, showroom |
 
 ---
 
 ## 📸 Screenshots
 
-> Add images to `frontend/screenshots/` and they'll render here.
-
-| Live console | Admin — catalog | WhatsApp chat |
+| Tenant directory (3 brands) | Catalog (Nova Electronics) | Login |
 |---|---|---|
-| ![Console](frontend/screenshots/console.png) | ![Admin](frontend/screenshots/admin.png) | ![Chat](frontend/screenshots/whatsapp.png) |
+| ![Tenants](frontend/screenshots/tenants.png) | ![Catalog](frontend/screenshots/admin-catalog.png) | ![Login](frontend/screenshots/login.png) |
 
 ---
 

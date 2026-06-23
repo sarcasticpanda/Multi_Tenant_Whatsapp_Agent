@@ -46,3 +46,6 @@ Thumbs.db
 
 # stray agent scratch dir
 brain/
+
+# playwright scratch
+.playwright-mcp/
