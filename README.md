@@ -26,15 +26,18 @@ own brand persona, knowledge base, media library and catalog, fully isolated. Bu
 |--------|---------|----------|-------|
 | **Luxury Furniture Store** | "Aria" — design concierge | Premium furniture | Catalog PDF, product images, price list |
 | **AutoCare Services** | "Max" — service advisor | Car servicing | Invoice/menu PDF, repair diagram |
-| **Nova Electronics** | "Kai" — tech advisor | Consumer electronics | Product photos, spec sheets, showroom |
+
+> New tenants can be created and populated entirely from the admin dashboard — name, persona, catalog, media and knowledge — with the RAG index updating live.
 
 ---
 
 ## 📸 Screenshots
 
-| Tenant directory (3 brands) | Catalog (Nova Electronics) | Login |
-|---|---|---|
-| ![Tenants](frontend/screenshots/tenants.png) | ![Catalog](frontend/screenshots/admin-catalog.png) | ![Login](frontend/screenshots/login.png) |
+| Live chat monitor (catalog PDF + RAG answers) | Catalog management |
+|---|---|
+| ![Conversation](frontend/screenshots/conversation.png) | ![Catalog](frontend/screenshots/admin-catalog.png) |
+| **Tenant directory** | **Login** |
+| ![Tenants](frontend/screenshots/tenants.png) | ![Login](frontend/screenshots/login.png) |
 
 ---
 
