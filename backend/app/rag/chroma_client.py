@@ -72,6 +72,35 @@ def get_chroma_collection():
     return _collection  # may be None while the background index build is in progress
 
 
+def catalog_doc_text(item: dict) -> str:
+    """The searchable text for a catalog item (must match build_chroma_index)."""
+    attr_text = " ".join(f"{k}: {v}" for k, v in (item.get("attributes") or {}).items())
+    return f"{item['name']}. {item.get('ai_description','')} {attr_text} Price: {item.get('price','')}"
+
+
+async def index_upsert(rows: list[dict]) -> None:
+    """Incrementally add/update a few vectors — NO full rebuild. rows: [{id, document, metadata}].
+    This makes adding knowledge/catalog instant instead of re-embedding the whole DB."""
+    if _collection is None or not rows:
+        return
+    await asyncio.to_thread(
+        _collection.upsert,
+        ids=[r["id"] for r in rows],
+        documents=[r["document"] for r in rows],
+        metadatas=[r["metadata"] for r in rows],
+    )
+
+
+async def index_remove(ids: list[str]) -> None:
+    """Incrementally delete vectors by id — NO full rebuild."""
+    if _collection is None or not ids:
+        return
+    try:
+        await asyncio.to_thread(_collection.delete, ids=list(ids))
+    except Exception as e:
+        print(f"index_remove failed: {e}")
+
+
 def search_knowledge_base(query: str, tenant_id: str, n_results: int = 3) -> list[str]:
     """
     Semantic search over KNOWLEDGE docs (FAQs, policies, pricing text), tenant-scoped.

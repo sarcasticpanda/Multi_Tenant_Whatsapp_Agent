@@ -17,7 +17,7 @@ import fitz  # PyMuPDF
 from app.config import settings
 from app.db.mongodb import get_db
 from app.storage import gridfs
-from app.rag.chroma_client import build_chroma_index
+from app.rag.chroma_client import build_chroma_index, index_upsert, catalog_doc_text
 
 logger = logging.getLogger(__name__)
 
@@ -138,24 +138,28 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
     base = source_name.rsplit(".", 1)[0][:50]
     await _set_job(job_id, phase="text", pages=pages)
     created = 0
+    rows = []
     for pno in range(pages):
         text = doc[pno].get_text().strip()
         if not text:
             continue
         for ci, chunk in enumerate(_chunk_text(text)):
+            doc_id = str(uuid4())
+            title = f"{base} · p{pno + 1}" + (f".{ci + 1}" if ci else "")
             await db.knowledge_docs.insert_one({
-                "doc_id": str(uuid4()), "tenant_id": tenant_id, "doc_type": "document",
-                "title": f"{base} · p{pno + 1}" + (f".{ci + 1}" if ci else ""),
-                "content": chunk, "source": "pdf", "source_pdf": source_name,
-                "created_at": datetime.utcnow(),
+                "doc_id": doc_id, "tenant_id": tenant_id, "doc_type": "document",
+                "title": title, "content": chunk, "source": "pdf",
+                "source_pdf": source_name, "created_at": datetime.utcnow(),
             })
+            rows.append({"id": doc_id, "document": chunk,
+                         "metadata": {"tenant_id": tenant_id, "type": "knowledge", "title": title}})
             created += 1
             if created % 15 == 0:
                 await _set_job(job_id, text_chunks=created)
     doc.close()
     await _set_job(job_id, text_chunks=created)
-    if created and rebuild:
-        await build_chroma_index()
+    if rebuild:                       # incremental upsert — NO full rebuild
+        await index_upsert(rows)
     note = "" if created else "No selectable text found — this PDF may be scanned images."
     return {"pages": pages, "text_chunks": created, "note": note}
 
@@ -167,10 +171,10 @@ async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str, jo
       • page TEXT       -> knowledge chunks (so the bot can ANSWER about the contents)
     Rebuilds the RAG index once at the end.
     """
-    cat = await ingest_catalog_pdf(tenant_id, pdf_bytes, source_name, rebuild=False, job_id=job_id)
-    txt = await ingest_text_pdf(tenant_id, pdf_bytes, source_name, rebuild=False, job_id=job_id)
-    await _set_job(job_id, phase="indexing")
-    await build_chroma_index()
+    # Each step upserts its own new vectors incrementally (no slow full rebuild).
+    cat = await ingest_catalog_pdf(tenant_id, pdf_bytes, source_name, rebuild=True, job_id=job_id)
+    await _set_job(job_id, phase="text")
+    txt = await ingest_text_pdf(tenant_id, pdf_bytes, source_name, rebuild=True, job_id=job_id)
     await _set_job(job_id, status="done", phase="done")
     return {
         "images_found": cat.get("images_found", 0),
@@ -191,6 +195,7 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str,
                 "note": "No embedded images found. This PDF may be text-only or scanned."}
 
     created = 0
+    rows = []
     for item in extracted:
         # store image in GridFS
         img_filename = f"catalog_{uuid4().hex[:8]}.{item['ext']}"
@@ -203,17 +208,22 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str,
         # Bulk import: derive name/desc from page text (fast, no per-image Gemini calls).
         name, description = await _describe(item["image_bytes"], item["page_text"], use_vision=False)
 
-        await db.catalog_items.insert_one({
-            "item_id": str(uuid4()), "tenant_id": tenant_id, "name": name,
+        item_id = str(uuid4())
+        catalog_doc = {
+            "item_id": item_id, "tenant_id": tenant_id, "name": name,
             "image_url": image_url, "ai_description": description,
             "price": "", "attributes": {"source_pdf": source_name, "page": item["page_number"]},
             "is_active": True, "created_at": datetime.utcnow(),
-        })
+        }
+        await db.catalog_items.insert_one(catalog_doc)
+        rows.append({"id": item_id, "document": catalog_doc_text(catalog_doc),
+                     "metadata": {"tenant_id": tenant_id, "type": "catalog", "title": name,
+                                  "image_url": image_url, "price": ""}})
         created += 1
         if created % 3 == 0:
             await _set_job(job_id, items_created=created)
 
     await _set_job(job_id, items_created=created)
-    if rebuild:
-        await build_chroma_index()  # make all new items searchable
-    return {"images_found": len(extracted), "items_created": created}
+    if rebuild:                       # incremental upsert — NO full rebuild
+        await index_upsert(rows)
+    return {"images_found": len(extracted), "items_created": created, "_rows": rows}

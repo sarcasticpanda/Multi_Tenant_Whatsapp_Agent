@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.db.mongodb import get_db
 from app.storage import gridfs
-from app.rag.chroma_client import build_chroma_index
+from app.rag.chroma_client import build_chroma_index, index_upsert, index_remove, catalog_doc_text
 
 router = APIRouter(prefix="/api/admin")
 logger = logging.getLogger(__name__)
@@ -281,7 +281,9 @@ async def admin_add_catalog_item(
         "created_at": datetime.utcnow(),
     }
     await db.catalog_items.insert_one(item)
-    await build_chroma_index()  # make it searchable now
+    await index_upsert([{"id": item["item_id"], "document": catalog_doc_text(item),
+                         "metadata": {"tenant_id": tenant_id, "type": "catalog", "title": name,
+                                      "image_url": image_url, "price": price}}])
     item.pop("_id", None)
     return {"ok": True, "item": {k: v for k, v in item.items() if k != "created_at"}}
 
@@ -330,9 +332,10 @@ async def admin_delete_catalog_by_source(
     large set (hundreds of files) can't time out the request."""
     db = get_db()
     q = {"tenant_id": tenant_id, "attributes.source_pdf": source_pdf}
-    urls = [it.get("image_url", "") for it in await db.catalog_items.find(q, {"image_url": 1}).to_list(None)]
+    docs = await db.catalog_items.find(q, {"image_url": 1, "item_id": 1}).to_list(None)
+    urls = [it.get("image_url", "") for it in docs]
     res = await db.catalog_items.delete_many(q)
-    await build_chroma_index()
+    await index_remove([it["item_id"] for it in docs])      # incremental, fast
     background_tasks.add_task(_cleanup_files_bg, urls)
     return {"ok": True, "deleted": res.deleted_count}
 
@@ -344,7 +347,7 @@ async def admin_delete_catalog_item(item_id: str):
     if item:
         await _delete_gridfs_if_owned(item.get("image_url", ""))
     await db.catalog_items.delete_one({"item_id": item_id})
-    await build_chroma_index()
+    await index_remove([item_id])
     return {"ok": True}
 
 
@@ -389,7 +392,8 @@ async def admin_add_knowledge(body: KnowledgeIn):
     doc["source"] = "admin"
     doc["created_at"] = datetime.utcnow()
     await db.knowledge_docs.insert_one(doc)
-    await build_chroma_index()
+    await index_upsert([{"id": doc["doc_id"], "document": doc["content"],
+                         "metadata": {"tenant_id": doc["tenant_id"], "type": "knowledge", "title": doc["title"]}}])
     return {"ok": True, "doc_id": doc["doc_id"]}
 
 
@@ -397,7 +401,7 @@ async def admin_add_knowledge(body: KnowledgeIn):
 async def admin_delete_knowledge(doc_id: str):
     db = get_db()
     await db.knowledge_docs.delete_one({"doc_id": doc_id})
-    await build_chroma_index()
+    await index_remove([doc_id])
     return {"ok": True}
 
 
@@ -405,8 +409,10 @@ async def admin_delete_knowledge(doc_id: str):
 async def admin_delete_knowledge_by_source(tenant_id: str, source_pdf: str):
     """Remove every chunk that came from one imported PDF in a single action."""
     db = get_db()
-    res = await db.knowledge_docs.delete_many({"tenant_id": tenant_id, "source_pdf": source_pdf})
-    await build_chroma_index()
+    q = {"tenant_id": tenant_id, "source_pdf": source_pdf}
+    ids = [d["doc_id"] for d in await db.knowledge_docs.find(q, {"doc_id": 1}).to_list(None)]
+    res = await db.knowledge_docs.delete_many(q)
+    await index_remove(ids)
     return {"ok": True, "deleted": res.deleted_count}
 
 

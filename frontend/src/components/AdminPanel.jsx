@@ -652,7 +652,9 @@ function IngestProgress({ tenantId, trigger, onDone }) {
   useEffect(() => {
     if (!trigger) return;
     let alive = true, doneSeen = false, extra = 0;
+    const started = Date.now();
     setJob({ status: "processing", phase: "starting", items_created: 0, text_chunks: 0, images_found: 0 });
+    const finish = () => { clearInterval(id); if (!doneSeen) { doneSeen = true; onDone?.(); } setTimeout(() => { if (alive) setJob(null); }, 5000); };
     const tick = async () => {
       try {
         const { job } = await api.ingestStatus(tenantId);
@@ -662,6 +664,10 @@ function IngestProgress({ tenantId, trigger, onDone }) {
           if (!doneSeen) { doneSeen = true; onDone?.(); }
           extra += 1;
           if (extra >= 2) { clearInterval(id); setTimeout(() => { if (alive) setJob(null); }, 5000); }
+        } else if (Date.now() - started > 90000) {
+          // Safety net: never spin forever (e.g. a restart killed the job) — finish & refresh.
+          setJob((j) => ({ ...(j || {}), status: "done", phase: "done" }));
+          finish();
         }
       } catch { /* keep polling */ }
     };
