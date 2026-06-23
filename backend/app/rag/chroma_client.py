@@ -1,3 +1,4 @@
+import asyncio
 import chromadb
 from chromadb.utils import embedding_functions
 from app.db.mongodb import get_db
@@ -58,7 +59,11 @@ async def build_chroma_index():
         print("No documents found in MongoDB. Skipping Chroma index build.")
         return _collection
 
-    _collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    # Embedding is CPU-bound (ONNX). Run it OFF the event loop so it never freezes
+    # the webhook server while a (re)build is in progress.
+    await asyncio.to_thread(
+        _collection.upsert, ids=ids, documents=documents, metadatas=metadatas
+    )
     print(f"Chroma index built: {len(docs)} knowledge + {len(items)} catalog = {_collection.count()} vectors")
     return _collection
 

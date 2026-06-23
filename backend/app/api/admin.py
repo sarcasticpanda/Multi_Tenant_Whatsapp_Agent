@@ -9,7 +9,7 @@ import logging
 from uuid import uuid4
 from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from app.config import settings
@@ -19,6 +19,17 @@ from app.rag.chroma_client import build_chroma_index
 
 router = APIRouter(prefix="/api/admin")
 logger = logging.getLogger(__name__)
+
+
+async def _ingest_pdf_bg(tenant_id: str, data: bytes, filename: str) -> None:
+    """Run the (potentially slow) PDF ingestion off the request so the upload returns
+    immediately and large catalogs don't hang the dashboard or block webhooks."""
+    try:
+        from app.rag.pdf_extractor import ingest_pdf_full
+        result = await ingest_pdf_full(tenant_id, data, filename)
+        logger.info(f"[INGEST] {filename}: {result}")
+    except Exception as e:
+        logger.error(f"Background PDF ingest failed for {filename}: {e}", exc_info=True)
 
 
 async def _delete_gridfs_if_owned(url: str) -> None:
@@ -139,6 +150,7 @@ async def admin_delete_route(customer_phone: str):
 @router.post("/tenants/{tenant_id}/media")
 async def admin_add_media(
     tenant_id: str,
+    background_tasks: BackgroundTasks,
     keyword: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -156,17 +168,16 @@ async def admin_add_media(
         {"tenant_id": tenant_id}, {"$set": {f"media_library.{keyword.lower()}": url}}
     )
 
-    # If it's a PDF, also read its TEXT into knowledge so the bot can not only SEND it
-    # but also ANSWER questions about its contents (document RAG) — one upload, both.
-    knowledge_chunks = 0
+    # If it's a PDF, ALSO index its contents in the background so the bot can both SEND
+    # it and ANSWER about it: page text -> knowledge, product images -> catalog.
+    # Done off-request so a large catalog doesn't hang the upload.
     ctype = (file.content_type or "").lower()
     fname = (file.filename or "").lower()
-    if "pdf" in ctype or fname.endswith(".pdf"):
-        from app.rag.pdf_extractor import ingest_text_pdf
-        summary = await ingest_text_pdf(tenant_id, data, file.filename)
-        knowledge_chunks = summary.get("text_chunks", 0)
+    indexing = "pdf" in ctype or fname.endswith(".pdf")
+    if indexing:
+        background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename)
 
-    return {"ok": True, "keyword": keyword.lower(), "url": url, "knowledge_chunks": knowledge_chunks}
+    return {"ok": True, "keyword": keyword.lower(), "url": url, "indexing": indexing}
 
 
 @router.delete("/tenants/{tenant_id}/media/{keyword}")
@@ -252,19 +263,23 @@ async def admin_add_catalog_item(
 
 
 @router.post("/tenants/{tenant_id}/catalog/from-pdf")
-async def admin_ingest_catalog_pdf(tenant_id: str, file: UploadFile = File(...)):
+async def admin_ingest_catalog_pdf(
+    tenant_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     """
-    Upload ONE catalog PDF -> integrate BOTH layers:
+    Upload ONE catalog PDF -> integrate BOTH layers (in the background, so a big
+    catalog doesn't hang the request):
       • product images  -> searchable catalog items (bot can SHOW them)
       • page text       -> knowledge chunks (bot can ANSWER about the contents)
+    Products/knowledge appear in the dashboard as they're indexed.
     """
-    from app.rag.pdf_extractor import ingest_pdf_full
     db = get_db()
     if not await db.tenants.find_one({"tenant_id": tenant_id}):
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
-    summary = await ingest_pdf_full(tenant_id, data, file.filename)
-    return {"ok": True, **summary}
+    background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename)
+    return {"ok": True, "status": "processing",
+            "note": "Indexing in the background — products and knowledge will appear shortly."}
 
 
 @router.delete("/catalog/{item_id}")

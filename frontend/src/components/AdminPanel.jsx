@@ -340,8 +340,13 @@ function PdfImport({ tenantId, onDone }) {
   const onPick = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setBusy(true); setResult(null);
-    try { const r = await api.ingestPdf(tenantId, file); setResult({ ok: true, ...r }); onDone?.(); }
-    catch (err) { setResult({ ok: false, error: err.message }); }
+    try {
+      const r = await api.ingestPdf(tenantId, file);
+      setResult({ ok: true, ...r });
+      onDone?.();
+      // Indexing runs in the background — refresh a few times so items appear as ready.
+      [4000, 10000, 20000, 35000].forEach((ms) => setTimeout(() => onDone?.(), ms));
+    } catch (err) { setResult({ ok: false, error: err.message }); }
     finally { setBusy(false); e.target.value = ""; }
   };
   return (
@@ -360,7 +365,7 @@ function PdfImport({ tenantId, onDone }) {
         </label>
       </div>
       {result && <div className={`text-[12px] mt-3 ${result.ok ? "text-brand-deep" : "text-alert"}`}>
-        {result.ok ? `${result.items_created} product(s) from ${result.images_found} image(s) · ${result.text_chunks || 0} text chunk(s) indexed.${result.note ? " " + result.note : ""}` : result.error}
+        {result.ok ? (result.note || "Indexing in the background — products and knowledge appear shortly.") : result.error}
       </div>}
     </div>
   );
@@ -372,10 +377,21 @@ function MediaTab({ tenantId }) {
   const [keyword, setKeyword] = useState("");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
   const load = useCallback(() => { api.adminTenants().then((d) => setTenant(d.tenants.find((t) => t.tenant_id === tenantId))).catch(console.error); }, [tenantId]);
   useEffect(() => { load(); }, [load]);
 
-  const add = async () => { if (!keyword || !file) return; setBusy(true); try { await api.addMedia(tenantId, keyword, file); setKeyword(""); setFile(null); load(); } finally { setBusy(false); } };
+  const add = async () => {
+    if (!keyword || !file) return;
+    setBusy(true); setMsg(null);
+    const wasPdf = (file.name || "").toLowerCase().endsWith(".pdf");
+    try {
+      await api.addMedia(tenantId, keyword, file);
+      setKeyword(""); setFile(null); load();
+      setMsg(wasPdf ? "Added. Reading the PDF's text + images in the background — searchable shortly." : "Added.");
+      if (wasPdf) [5000, 12000, 25000].forEach((ms) => setTimeout(load, ms));
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
   const lib = tenant?.media_library || {};
 
   return (
@@ -392,6 +408,7 @@ function MediaTab({ tenantId }) {
               className="block mt-1.5 w-full text-[12.5px] text-muted file:mr-2 file:px-2.5 file:py-1.5 file:rounded-lg file:border-0 file:bg-canvas file:text-ink file:cursor-pointer" />
           </div>
           <button onClick={add} disabled={busy} className="mt-4 w-full accent-bg text-white text-[13px] font-medium px-4 py-2.5 rounded-lg disabled:opacity-40">{busy ? "Uploading…" : "Add file"}</button>
+          {msg && <div className="text-[12px] mt-3 accent-text leading-relaxed">{msg}</div>}
         </SidebarCard>
       }
     >
