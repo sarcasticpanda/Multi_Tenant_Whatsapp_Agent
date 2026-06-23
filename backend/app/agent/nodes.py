@@ -39,19 +39,21 @@ def _get_gemini():
 
 
 async def _groq_create(groq, **kwargs):
-    """Groq chat completion with retry/backoff on transient rate limits (free tier = 30/min)."""
+    """Groq chat completion with retry/backoff on transient rate limits (free tier).
+    The Groq SDK is synchronous, so run it in a thread to NOT block the webhook server."""
     last = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            return groq.chat.completions.create(**kwargs)
+            return await asyncio.to_thread(groq.chat.completions.create, **kwargs)
         except Exception as e:
             last = e
             m = str(e).lower()
-            if any(w in m for w in ("rate", "429", "limit", "timeout", "temporar")):
-                wait = 3 * (attempt + 1)
-                logger.warning(f"Groq throttled (attempt {attempt+1}), retrying in {wait}s")
+            if any(w in m for w in ("rate", "429", "limit", "timeout", "temporar", "overload", "503")):
+                wait = 2 * (attempt + 1)
+                logger.warning(f"Groq throttled (attempt {attempt+1}): {str(e)[:120]} — retrying in {wait}s")
                 await asyncio.sleep(wait)
                 continue
+            logger.error(f"Groq call failed (non-retryable): {str(e)[:200]}")
             raise
     raise last
 
@@ -228,18 +230,18 @@ async def context_retriever_node(state: AgentState) -> AgentState:
 def _build_system_prompt(tenant: dict, rag_chunks: list, catalog_names: list | None = None) -> str:
     prompt = tenant["system_prompt"]
 
-    # Tell the LLM the EXACT catalog inventory so it's HONEST and never
-    # presents an unrelated item as a "similar" option.
+    # Tell the LLM what's in the catalog so it's HONEST about what exists — but CAP the
+    # list so a big catalog doesn't bloat the prompt (which blows Groq's per-minute limit).
     if catalog_names:
-        prompt += "\n\n--- YOUR COMPLETE CATALOG (the ONLY products you have) ---\n"
-        for n in catalog_names:
+        shown = catalog_names[:20]
+        prompt += "\n\n--- SAMPLE OF YOUR CATALOG ---\n"
+        for n in shown:
             prompt += f"- {n}\n"
+        if len(catalog_names) > len(shown):
+            prompt += f"...and {len(catalog_names) - len(shown)} more products.\n"
         prompt += (
-            "These are the ONLY products you offer. Never invent products or imply you have items "
-            "not on this list. If a customer asks for 'more' of a type and you only have the one you've "
-            "already shown, say so honestly (e.g. 'that's the only sofa we have in that style right now') "
-            "and offer to send the full *catalog* to browse everything. Do NOT present an unrelated product "
-            "(like a bed) as similar to what they asked for (like a sofa).\n"
+            "Use the search_catalog tool to find a specific product before describing or sending it. "
+            "Never invent products you don't have; if you're unsure, search first or offer the full *catalog*.\n"
             "--- END CATALOG ---\n"
         )
 
@@ -265,8 +267,8 @@ def _build_system_prompt(tenant: dict, rag_chunks: list, catalog_names: list | N
 
     if rag_chunks:
         prompt += "\n\n--- RELEVANT KNOWLEDGE BASE ---\n"
-        for i, chunk in enumerate(rag_chunks, 1):
-            prompt += f"\n[{i}] {chunk}\n"
+        for i, chunk in enumerate(rag_chunks[:4], 1):     # cap count
+            prompt += f"\n[{i}] {chunk[:500]}\n"          # and length, to limit tokens
         prompt += "\n--- END KNOWLEDGE BASE ---\n"
         prompt += (
             "\nBase your answer on the knowledge base above. "
@@ -344,7 +346,11 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         )
     except Exception as e:
         logger.error(f"Groq call failed after retries: {e}")
-        state["llm_reply"] = "Give me just a moment — could you send that again? 😊"
+        # Don't blame the customer — be honest that we're momentarily busy.
+        state["llm_reply"] = (
+            "Sorry, I'm handling a lot of requests right now 🙏 Please give me a few "
+            "seconds and ask again — I'll be right with you."
+        )
         return state
 
     msg = resp.choices[0].message
