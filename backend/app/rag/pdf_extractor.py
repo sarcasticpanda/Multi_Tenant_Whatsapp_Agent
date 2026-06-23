@@ -6,6 +6,7 @@ and create searchable catalog_items.
 This is how "upload one catalog PDF" turns into many searchable products with
 image + description + the surrounding price/spec text.
 """
+import hashlib
 import io
 import logging
 from uuid import uuid4
@@ -21,10 +22,14 @@ from app.rag.chroma_client import build_chroma_index
 logger = logging.getLogger(__name__)
 
 
-def _extract(pdf_bytes: bytes) -> list[dict]:
-    """Return [{image_bytes, ext, page_number, page_text}] for each embedded image."""
+def _extract(pdf_bytes: bytes, max_items: int = 60) -> list[dict]:
+    """
+    Return [{image_bytes, ext, page_number, page_text}] for meaningful product images.
+    Filters out tiny icons/thumbnails, dedupes identical images, and caps the count so a
+    big catalogue doesn't explode into hundreds of junk 'products'.
+    """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    out = []
+    out, seen = [], set()
     for page_num in range(len(doc)):
         page = doc[page_num]
         page_text = page.get_text().strip()
@@ -35,27 +40,40 @@ def _extract(pdf_bytes: bytes) -> list[dict]:
             except Exception:
                 continue
             data = base["image"]
-            # skip tiny images (logos, icons, separators)
-            if len(data) < 6000:
+            # Keep only reasonably sized product photos.
+            if len(data) < 15000:                       # skip small (logos, icons, rules)
                 continue
+            if base.get("width", 0) < 250 or base.get("height", 0) < 250:
+                continue                                 # skip thumbnails
+            h = hashlib.md5(data).hexdigest()
+            if h in seen:                                # skip duplicates (repeated swatches)
+                continue
+            seen.add(h)
             out.append({
                 "image_bytes": data,
                 "ext": base.get("ext", "png"),
                 "page_number": page_num + 1,
                 "page_text": page_text,
             })
+            if len(out) >= max_items:
+                doc.close()
+                return out
     doc.close()
     return out
 
 
-async def _describe(image_bytes: bytes, page_text: str) -> tuple[str, str]:
+async def _describe(image_bytes: bytes, page_text: str, use_vision: bool = True) -> tuple[str, str]:
     """
-    Returns (name, description). Tries Gemini Vision; falls back to page text.
+    Returns (name, description). Tries Gemini Vision when use_vision; otherwise (bulk PDF
+    import) derives the name/description from the page text — instant and no rate limits.
     """
     # Fallback name/description from the page text
     first_line = next((ln.strip() for ln in page_text.splitlines() if ln.strip()), "Catalog item")
     fallback_name = first_line[:60]
     fallback_desc = page_text[:400] if page_text else first_line
+
+    if not use_vision:
+        return fallback_name, fallback_desc
 
     try:
         from google import genai
@@ -162,7 +180,8 @@ async def ingest_catalog_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str,
             {"tenant_id": tenant_id, "source_pdf": source_name},
         )
         image_url = gridfs.public_url(file_id, img_filename)
-        name, description = await _describe(item["image_bytes"], item["page_text"])
+        # Bulk import: derive name/desc from page text (fast, no per-image Gemini calls).
+        name, description = await _describe(item["image_bytes"], item["page_text"], use_vision=False)
 
         await db.catalog_items.insert_one({
             "item_id": str(uuid4()), "tenant_id": tenant_id, "name": name,

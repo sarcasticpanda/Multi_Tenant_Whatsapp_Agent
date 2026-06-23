@@ -282,6 +282,19 @@ async def admin_ingest_catalog_pdf(
             "note": "Indexing in the background — products and knowledge will appear shortly."}
 
 
+@router.delete("/tenants/{tenant_id}/catalog/by-source")
+async def admin_delete_catalog_by_source(tenant_id: str, source_pdf: str):
+    """Remove every product that came from one imported PDF (and its image files)."""
+    db = get_db()
+    q = {"tenant_id": tenant_id, "attributes.source_pdf": source_pdf}
+    items = await db.catalog_items.find(q).to_list(None)
+    for it in items:
+        await _delete_gridfs_if_owned(it.get("image_url", ""))
+    res = await db.catalog_items.delete_many(q)
+    await build_chroma_index()
+    return {"ok": True, "deleted": res.deleted_count}
+
+
 @router.delete("/catalog/{item_id}")
 async def admin_delete_catalog_item(item_id: str):
     db = get_db()
