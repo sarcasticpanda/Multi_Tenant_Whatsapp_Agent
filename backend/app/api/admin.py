@@ -21,6 +21,12 @@ router = APIRouter(prefix="/api/admin")
 logger = logging.getLogger(__name__)
 
 
+async def _cleanup_files_bg(urls: list[str]) -> None:
+    """Delete many GridFS blobs off-request (bulk removals can be hundreds of files)."""
+    for url in urls:
+        await _delete_gridfs_if_owned(url)
+
+
 async def _ingest_pdf_bg(tenant_id: str, data: bytes, filename: str) -> None:
     """Run the (potentially slow) PDF ingestion off the request so the upload returns
     immediately and large catalogs don't hang the dashboard or block webhooks."""
@@ -283,15 +289,18 @@ async def admin_ingest_catalog_pdf(
 
 
 @router.delete("/tenants/{tenant_id}/catalog/by-source")
-async def admin_delete_catalog_by_source(tenant_id: str, source_pdf: str):
-    """Remove every product that came from one imported PDF (and its image files)."""
+async def admin_delete_catalog_by_source(
+    tenant_id: str, source_pdf: str, background_tasks: BackgroundTasks
+):
+    """Remove every product that came from one imported PDF. Deletes the records (and
+    rebuilds the index) immediately; cleans up the image blobs in the background so a
+    large set (hundreds of files) can't time out the request."""
     db = get_db()
     q = {"tenant_id": tenant_id, "attributes.source_pdf": source_pdf}
-    items = await db.catalog_items.find(q).to_list(None)
-    for it in items:
-        await _delete_gridfs_if_owned(it.get("image_url", ""))
+    urls = [it.get("image_url", "") for it in await db.catalog_items.find(q, {"image_url": 1}).to_list(None)]
     res = await db.catalog_items.delete_many(q)
     await build_chroma_index()
+    background_tasks.add_task(_cleanup_files_bg, urls)
     return {"ok": True, "deleted": res.deleted_count}
 
 
