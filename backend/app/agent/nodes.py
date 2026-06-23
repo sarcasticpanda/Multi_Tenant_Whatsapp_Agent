@@ -13,7 +13,7 @@ from app.agent.state import AgentState
 from app.agent.tools import TOOLS
 from app.config import settings
 from app.db.mongodb import get_db
-from app.rag.chroma_client import search_knowledge_base, search_catalog
+from app.rag.chroma_client import search_knowledge_base, search_catalog, ensure_index_ready
 from app.storage import gridfs
 from app.whatsapp import client as wa
 
@@ -160,7 +160,9 @@ async def context_retriever_node(state: AgentState) -> AgentState:
     ).sort("timestamp", -1).limit(5).to_list(5)
     state["chat_history"] = list(reversed(msgs))
 
-    # RAG
+    # RAG — make sure the in-memory index is built (Render free tier loses it on sleep/restart;
+    # without this, the request that wakes the service would query an empty index).
+    await ensure_index_ready()
     state["rag_chunks"] = search_knowledge_base(
         query=state["inbound_text"],
         tenant_id=state["tenant_id"],
@@ -176,51 +178,115 @@ async def context_retriever_node(state: AgentState) -> AgentState:
     else:
         logger.info("[RAG/Chroma] no relevant knowledge found -> LLM answers from system prompt only")
 
-    # Bonus B2 + inbound image persistence
+    # Inbound media: download once, then branch on PDF (document RAG) vs image (vision).
     if state.get("inbound_media_id"):
         try:
             tmp_url = await wa.get_media_url(state["inbound_media_id"])
-            img_bytes = await wa.download_media(tmp_url)
+            media_bytes = await wa.download_media(tmp_url)
 
-            # Persist the customer-sent image to GridFS so the dashboard can show it.
-            # (Meta's media URL expires in ~5 min, so we must store it ourselves.)
-            try:
-                stored_id = await gridfs.upload_bytes(
-                    data=img_bytes,
-                    filename=f"inbound_{state['whatsapp_message_id']}.jpg",
-                    content_type="image/jpeg",
-                    metadata={"tenant_id": state["tenant_id"], "direction": "INBOUND"},
-                )
-                stored_url = gridfs.public_url(stored_id)
-                await db.message_audit_log.update_one(
-                    {"whatsapp_message_id": state["whatsapp_message_id"], "direction": "INBOUND"},
-                    {"$set": {"media_url": stored_url, "media_type": "IMAGE"}},
-                )
-                logger.info(f"[INBOUND IMAGE] stored to GridFS -> {stored_url}")
-            except Exception as e:
-                logger.warning(f"Failed to persist inbound image: {e}")
-
-            # Gemini Vision description (fed into the LLM context)
-            gem = _get_gemini()
-            if gem is None:
-                raise RuntimeError("Gemini client not available")
-            vision_resp = gem.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[
-                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                    types.Part.from_text(text=(
-                        "Describe this image concisely for a customer service agent. "
-                        "Focus on: what product or item is shown, its appearance, condition, "
-                        "color, style, and any details relevant to helping the customer."
-                    )),
-                ],
+            mime = (state.get("inbound_media_mime") or "").lower()
+            fname = (state.get("inbound_media_filename") or "").lower()
+            is_pdf = (
+                media_bytes[:5] == b"%PDF-"
+                or "pdf" in mime
+                or fname.endswith(".pdf")
+                or (state.get("inbound_media_type") == "document" and not mime.startswith("image/"))
             )
-            state["inbound_image_description"] = vision_resp.text
-            logger.info(f"[VISION] {state['inbound_image_description'][:100]}")
+
+            if is_pdf:
+                await _handle_inbound_pdf(state, db, media_bytes)
+            else:
+                await _handle_inbound_image(state, db, media_bytes)
         except Exception as e:
-            logger.warning(f"Inbound image handling failed: {e}")
+            logger.warning(f"Inbound media handling failed: {e}")
 
     return state
+
+
+async def _handle_inbound_pdf(state: AgentState, db, pdf_bytes: bytes) -> None:
+    """A customer sent a PDF. Persist it (dashboard view), chunk its text into the RAG
+    knowledge base (so it's searchable on future turns), and stash the extracted text on
+    the state so the bot can answer about it in THIS turn — no manual command, no restart."""
+    from app.rag.pdf_extractor import ingest_text_pdf
+
+    source_name = state.get("inbound_media_filename") or f"customer_{state['whatsapp_message_id']}.pdf"
+
+    # Persist to GridFS so the dashboard shows the file the customer sent.
+    try:
+        stored_id = await gridfs.upload_bytes(
+            data=pdf_bytes, filename=source_name, content_type="application/pdf",
+            metadata={"tenant_id": state["tenant_id"], "direction": "INBOUND"},
+        )
+        stored_url = gridfs.public_url(stored_id, source_name)
+        await db.message_audit_log.update_one(
+            {"whatsapp_message_id": state["whatsapp_message_id"], "direction": "INBOUND"},
+            {"$set": {"media_url": stored_url, "media_type": "DOCUMENT"}},
+        )
+        logger.info(f"[INBOUND PDF] stored to GridFS -> {stored_url}")
+    except Exception as e:
+        logger.warning(f"Failed to persist inbound PDF: {e}")
+
+    # Chunk + embed into the tenant's knowledge base (this is the RAG ingestion that
+    # previously only ran via the dashboard / manual commands).
+    try:
+        summary = await ingest_text_pdf(
+            state["tenant_id"], pdf_bytes, source_name, rebuild=True
+        )
+        logger.info(
+            f"[INBOUND PDF] ingested {summary.get('text_chunks', 0)} chunks "
+            f"from {summary.get('pages', 0)} pages of {source_name!r}"
+        )
+        preview = summary.get("preview") or ""
+        if preview:
+            state["inbound_doc_summary"] = (
+                f"The customer sent a PDF named '{source_name}'. Its text contents are:\n{preview}"
+            )
+        elif summary.get("note"):
+            state["inbound_doc_summary"] = (
+                f"The customer sent a PDF named '{source_name}', but {summary['note']}"
+            )
+    except Exception as e:
+        logger.warning(f"Inbound PDF ingestion failed: {e}")
+
+
+async def _handle_inbound_image(state: AgentState, db, img_bytes: bytes) -> None:
+    """A customer sent an image. Persist it and describe it with Gemini Vision (bonus B2)."""
+    # Persist the customer-sent image to GridFS so the dashboard can show it.
+    # (Meta's media URL expires in ~5 min, so we must store it ourselves.)
+    try:
+        stored_id = await gridfs.upload_bytes(
+            data=img_bytes,
+            filename=f"inbound_{state['whatsapp_message_id']}.jpg",
+            content_type="image/jpeg",
+            metadata={"tenant_id": state["tenant_id"], "direction": "INBOUND"},
+        )
+        stored_url = gridfs.public_url(stored_id)
+        await db.message_audit_log.update_one(
+            {"whatsapp_message_id": state["whatsapp_message_id"], "direction": "INBOUND"},
+            {"$set": {"media_url": stored_url, "media_type": "IMAGE"}},
+        )
+        logger.info(f"[INBOUND IMAGE] stored to GridFS -> {stored_url}")
+    except Exception as e:
+        logger.warning(f"Failed to persist inbound image: {e}")
+
+    # Gemini Vision description (fed into the LLM context)
+    gem = _get_gemini()
+    if gem is None:
+        logger.warning("Gemini client not available — skipping vision description")
+        return
+    vision_resp = gem.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+            types.Part.from_text(text=(
+                "Describe this image concisely for a customer service agent. "
+                "Focus on: what product or item is shown, its appearance, condition, "
+                "color, style, and any details relevant to helping the customer."
+            )),
+        ],
+    )
+    state["inbound_image_description"] = vision_resp.text
+    logger.info(f"[VISION] {(state['inbound_image_description'] or '')[:100]}")
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +393,8 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
     user_text = state["inbound_text"]
     if state.get("inbound_image_description"):
         user_text = f"[Customer sent an image: {state['inbound_image_description']}]\n{user_text}"
+    if state.get("inbound_doc_summary"):
+        user_text = f"[{state['inbound_doc_summary']}]\n{user_text}"
     messages.append({"role": "user", "content": user_text})
 
     groq = _get_groq()

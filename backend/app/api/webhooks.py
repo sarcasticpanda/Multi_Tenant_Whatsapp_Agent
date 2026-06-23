@@ -34,6 +34,8 @@ def _extract_message(payload: dict) -> dict | None:
         text = ""
         media_id = None
         media_type = None
+        media_filename = None
+        media_mime = None
 
         if msg_type == "text":
             text = message["text"]["body"]
@@ -41,10 +43,13 @@ def _extract_message(payload: dict) -> dict | None:
             media_id = message["image"]["id"]
             text = message["image"].get("caption", "")
             media_type = "image"
+            media_mime = message["image"].get("mime_type")
         elif msg_type == "document":
             media_id = message["document"]["id"]
             text = message["document"].get("caption", "")
             media_type = "document"
+            media_filename = message["document"].get("filename")
+            media_mime = message["document"].get("mime_type")
         else:
             # Unsupported type (audio, video, etc.) — skip
             return None
@@ -56,6 +61,8 @@ def _extract_message(payload: dict) -> dict | None:
             "text": text,
             "media_id": media_id,
             "media_type": media_type,
+            "media_filename": media_filename,
+            "media_mime": media_mime,
             "timestamp": message.get("timestamp"),
         }
     except (KeyError, IndexError):
@@ -287,7 +294,10 @@ async def _run_agent(message_data: dict, tenant_id: str, session_id: str):
             "inbound_text": message_data["text"] or "(no text)",
             "inbound_media_id": message_data.get("media_id"),
             "inbound_media_type": message_data.get("media_type"),
+            "inbound_media_filename": message_data.get("media_filename"),
+            "inbound_media_mime": message_data.get("media_mime"),
             "inbound_image_description": None,
+            "inbound_doc_summary": None,
             "tenant_config": tenant,
             "chat_history": None,
             "rag_chunks": None,

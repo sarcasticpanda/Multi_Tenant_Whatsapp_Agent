@@ -10,7 +10,10 @@ class AgentState(TypedDict):
     inbound_text: str
     inbound_media_id: Optional[str]       # Meta media_id for user-sent image
     inbound_media_type: Optional[str]     # "image", "document", etc.
+    inbound_media_filename: Optional[str] # original filename (documents)
+    inbound_media_mime: Optional[str]     # original mime type (documents)
     inbound_image_description: Optional[str]  # Gemini Vision output (bonus B2)
+    inbound_doc_summary: Optional[str]    # extracted text of a customer-sent PDF (for this turn)
 
     # Retrieved context (Node 2)
     tenant_config: Optional[dict]

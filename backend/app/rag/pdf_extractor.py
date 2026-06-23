@@ -114,6 +114,28 @@ async def _describe(image_bytes: bytes, page_text: str, use_vision: bool = True)
     return fallback_name, fallback_desc
 
 
+def extract_pdf_text(pdf_bytes: bytes, max_chars: int = 4000) -> str:
+    """Plain concatenated text of a PDF (page by page), capped. Used to give the LLM
+    the contents of a customer-sent document so it can answer in the same turn."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        logger.warning(f"extract_pdf_text: could not open PDF: {e}")
+        return ""
+    parts = []
+    total = 0
+    for pno in range(len(doc)):
+        t = doc[pno].get_text().strip()
+        if not t:
+            continue
+        parts.append(t)
+        total += len(t)
+        if total >= max_chars:
+            break
+    doc.close()
+    return " ".join(" ".join(parts).split())[:max_chars]
+
+
 def _chunk_text(text: str, size: int = 800, overlap: int = 120) -> list[str]:
     """Split text into overlapping ~800-char chunks for embedding."""
     text = " ".join(text.split())
@@ -132,6 +154,7 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
     knowledge_doc so the bot can answer questions about the document's contents.
     (Different from ingest_catalog_pdf, which extracts product IMAGES.)
     """
+    MAX_CHUNKS = 150  # cap so a huge PDF can't bloat the index / blow Railway's memory
     db = get_db()
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = len(doc)
@@ -140,6 +163,8 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
     created = 0
     rows = []
     for pno in range(pages):
+        if created >= MAX_CHUNKS:
+            break
         text = doc[pno].get_text().strip()
         if not text:
             continue
@@ -156,12 +181,15 @@ async def ingest_text_pdf(tenant_id: str, pdf_bytes: bytes, source_name: str, re
             created += 1
             if created % 15 == 0:
                 await _set_job(job_id, text_chunks=created)
+            if created >= MAX_CHUNKS:
+                break
     doc.close()
     await _set_job(job_id, text_chunks=created)
     if rebuild:                       # incremental upsert — NO full rebuild
         await index_upsert(rows)
     note = "" if created else "No selectable text found — this PDF may be scanned images."
-    return {"pages": pages, "text_chunks": created, "note": note}
+    preview = extract_pdf_text(pdf_bytes)
+    return {"pages": pages, "text_chunks": created, "note": note, "preview": preview}
 
 
 async def ingest_pdf_full(tenant_id: str, pdf_bytes: bytes, source_name: str, job_id: str | None = None) -> dict:

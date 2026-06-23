@@ -43,3 +43,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# stray agent scratch dir
+brain/

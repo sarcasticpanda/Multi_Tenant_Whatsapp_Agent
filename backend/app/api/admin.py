@@ -21,6 +21,18 @@ router = APIRouter(prefix="/api/admin")
 logger = logging.getLogger(__name__)
 
 
+MAX_UPLOAD_MB = 18  # keep memory in check on a small instance
+
+
+def _check_upload_size(data: bytes, filename: str) -> None:
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(
+            413,
+            f"“{filename}” is {len(data) // (1024*1024)} MB — too large (max {MAX_UPLOAD_MB} MB). "
+            "Please use a smaller PDF so indexing stays fast and memory-safe.",
+        )
+
+
 async def _cleanup_files_bg(urls: list[str]) -> None:
     """Delete many GridFS blobs off-request (bulk removals can be hundreds of files)."""
     for url in urls:
@@ -181,6 +193,7 @@ async def admin_add_media(
     if not tenant:
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
+    _check_upload_size(data, file.filename)
     file_id = await gridfs.upload_bytes(
         data, file.filename, file.content_type or "application/octet-stream",
         {"tenant_id": tenant_id, "keyword": keyword},
@@ -303,6 +316,7 @@ async def admin_ingest_catalog_pdf(
     if not await db.tenants.find_one({"tenant_id": tenant_id}):
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
+    _check_upload_size(data, file.filename)
     job_id = await _start_ingest_job(tenant_id, file.filename)
     background_tasks.add_task(_ingest_pdf_bg, tenant_id, data, file.filename, job_id)
     return {"ok": True, "status": "processing", "job_id": job_id,

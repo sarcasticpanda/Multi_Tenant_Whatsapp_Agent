@@ -14,7 +14,7 @@ from app.api.auth import router as auth_router, require_admin
 from app.db.mongodb import connect_mongodb, close_mongodb
 from app.db.seed import seed_tenants_if_empty
 from app.db.seed_catalog import seed_catalog_if_empty
-from app.rag.chroma_client import build_chroma_index
+from app.rag.chroma_client import ensure_index_ready
 from app.rag.seed_knowledge import seed_knowledge_if_empty
 
 logging.basicConfig(level=logging.INFO)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 async def _build_index_bg():
     """Build the RAG index after startup so it never blocks the port/health check."""
     try:
-        await build_chroma_index()
+        await ensure_index_ready()
         logger.info("RAG index ready.")
     except Exception as e:
         logger.error(f"RAG index build failed (bot still serves, RAG degraded): {e}")
