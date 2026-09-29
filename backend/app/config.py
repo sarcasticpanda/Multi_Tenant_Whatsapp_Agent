@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     # App
     app_base_url: str = "http://localhost:8000"
 
-    # Dashboard login (simple single-admin gate)
-    admin_password: str = "kredai_admin"
+    # Dashboard login (single-admin gate). REQUIRED — no default on purpose:
+    # the app refuses to boot without ADMIN_PASSWORD set, so a forgotten
+    # env var can never silently leave the public default "kredai_admin" live.
+    admin_password: str
 
     class Config:
         env_file = ".env"

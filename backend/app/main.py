@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
@@ -49,18 +50,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Multi-Tenant WhatsApp Agent", lifespan=lifespan)
 
+# Tight CORS: only our own frontend(s) may call the API from a browser.
+# Comma-separated override via CORS_ORIGINS env var.
+_cors_origins = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS",
+        "https://multi-tenant-whatsapp-agent.vercel.app,"
+        "http://localhost:5173,http://localhost:8000",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "ngrok-skip-browser-warning"],
 )
 
 # Static files (PDFs, images for tenant media library)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(webhook_router)
-app.include_router(dashboard_router)
+# Dashboard APIs carry chat data + can send WhatsApp messages — require admin token.
+# (Frontend already attaches Authorization: Bearer on every call after login.)
+app.include_router(dashboard_router, dependencies=[Depends(require_admin)])
 app.include_router(files_router)
 app.include_router(auth_router)
 # Admin/management routes require a valid login token.
