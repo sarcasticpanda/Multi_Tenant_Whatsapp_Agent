@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import re
@@ -324,7 +325,13 @@ async def verify_webhook(
     hub_verify_token: str = Query(alias="hub.verify_token", default=""),
     hub_challenge: str = Query(alias="hub.challenge", default=""),
 ):
-    if hub_mode == "subscribe" and hub_verify_token == settings.meta_verify_token:
+    # Constant-time compare so the token can't be probed byte-by-byte.
+    # A missing/empty server-side token must never verify (fail closed).
+    if (
+        settings.meta_verify_token
+        and hmac.compare_digest(hub_mode, "subscribe")
+        and hmac.compare_digest(hub_verify_token, settings.meta_verify_token)
+    ):
         return PlainTextResponse(content=hub_challenge)
     return Response(status_code=403)
 
@@ -344,7 +351,15 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             logger.warning("Invalid/missing webhook signature — rejected")
             return Response(status_code=403)
 
-    payload = json.loads(payload_bytes) if payload_bytes else {}
+    # Malformed / non-JSON bodies must be a clean 400, never a 500 traceback.
+    try:
+        payload = json.loads(payload_bytes) if payload_bytes else {}
+    except json.JSONDecodeError:
+        logger.warning("Malformed webhook body — rejected")
+        return Response(status_code=400)
+    if not isinstance(payload, dict):
+        logger.warning("Non-object webhook body — rejected")
+        return Response(status_code=400)
 
     message_data = _extract_message(payload)
     if not message_data:

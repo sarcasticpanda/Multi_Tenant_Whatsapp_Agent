@@ -24,6 +24,29 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_MB = 18  # keep memory in check on a small instance
 
 
+def _validate_keyword(keyword: str) -> str:
+    """Media keywords are interpolated into MongoDB dotted paths
+    (media_library.<keyword>). Reject anything that could escape that object —
+    '.' nesting or '$' operators would let a keyword rewrite other fields."""
+    kw = (keyword or "").strip().lower()
+    if not kw or "." in kw or kw.startswith("$"):
+        raise HTTPException(
+            400, "Invalid keyword: must not be empty, contain '.' or start with '$'"
+        )
+    return kw
+
+
+def _safe_set_doc(body: dict) -> dict:
+    """admin_update_tenant passes a raw JSON body into $set — reject keys that
+    could act as Mongo operators ('.' nesting / '$' prefixes)."""
+    clean = {}
+    for k, v in (body or {}).items():
+        if not isinstance(k, str) or "." in k or k.startswith("$"):
+            raise HTTPException(400, f"Invalid field name: {k!r}")
+        clean[k] = v
+    return clean
+
+
 def _check_upload_size(data: bytes, filename: str) -> None:
     if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(
@@ -115,6 +138,7 @@ async def admin_create_tenant(body: TenantIn):
 @router.put("/tenants/{tenant_id}")
 async def admin_update_tenant(tenant_id: str, body: dict):
     db = get_db()
+    body = _safe_set_doc(body)
     body.pop("tenant_id", None)
     body.pop("_id", None)
     res = await db.tenants.update_one({"tenant_id": tenant_id}, {"$set": body})
@@ -194,13 +218,14 @@ async def admin_add_media(
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
     _check_upload_size(data, file.filename)
+    keyword = _validate_keyword(keyword)
     file_id = await gridfs.upload_bytes(
         data, file.filename, file.content_type or "application/octet-stream",
         {"tenant_id": tenant_id, "keyword": keyword},
     )
     url = gridfs.public_url(file_id, file.filename)
     await db.tenants.update_one(
-        {"tenant_id": tenant_id}, {"$set": {f"media_library.{keyword.lower()}": url}}
+        {"tenant_id": tenant_id}, {"$set": {f"media_library.{keyword}": url}}
     )
 
     # If it's a PDF, ALSO index its contents in the background so the bot can both SEND
@@ -220,15 +245,16 @@ async def admin_add_media(
 @router.delete("/tenants/{tenant_id}/media/{keyword}")
 async def admin_remove_media(tenant_id: str, keyword: str):
     db = get_db()
+    keyword = _validate_keyword(keyword)
     tenant = await db.tenants.find_one({"tenant_id": tenant_id})
-    url = (tenant or {}).get("media_library", {}).get(keyword.lower(), "")
+    url = (tenant or {}).get("media_library", {}).get(keyword, "")
     # Only delete the stored blob if no OTHER keyword points to the same file.
     others = [k for k, u in (tenant or {}).get("media_library", {}).items()
-              if u == url and k != keyword.lower()]
+              if u == url and k != keyword]
     if url and not others:
         await _delete_gridfs_if_owned(url)
     await db.tenants.update_one(
-        {"tenant_id": tenant_id}, {"$unset": {f"media_library.{keyword.lower()}": ""}}
+        {"tenant_id": tenant_id}, {"$unset": {f"media_library.{keyword}": ""}}
     )
     return {"ok": True}
 
@@ -272,6 +298,7 @@ async def admin_add_catalog_item(
             "or 'Import a catalog PDF' to auto-extract product images.",
         )
     data = await file.read()
+    _check_upload_size(data, file.filename)
     file_id = await gridfs.upload_bytes(
         data, file.filename, file.content_type or "image/jpeg",
         {"tenant_id": tenant_id, "catalog": name},
@@ -394,6 +421,7 @@ async def admin_ingest_knowledge_pdf(tenant_id: str, file: UploadFile = File(...
     if not await db.tenants.find_one({"tenant_id": tenant_id}):
         raise HTTPException(404, "Tenant not found")
     data = await file.read()
+    _check_upload_size(data, file.filename)
     summary = await ingest_text_pdf(tenant_id, data, file.filename)
     return {"ok": True, **summary}
 
