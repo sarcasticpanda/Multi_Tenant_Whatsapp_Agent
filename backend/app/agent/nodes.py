@@ -90,7 +90,16 @@ async def acknowledge_node(state: AgentState) -> AgentState:
     Fires read receipt + typing indicator immediately.
     Saves inbound message to MongoDB.
     """
-    phone_id = state["tenant_config"]["whatsapp_phone_number_id"] if state.get("tenant_config") else settings.meta_phone_number_id
+    # Prefer the LIVE phone_number_id from the inbound webhook metadata — it is
+    # the ID Meta expects on outbound calls for this conversation. The stored
+    # tenant copy can go stale (e.g. number re-created in Meta), which used to
+    # break receipts/typing/replies with silent Meta 400s. Fall back to the
+    # stored value, then the configured default.
+    phone_id = (
+        state.get("whatsapp_phone_number_id")
+        or (state.get("tenant_config") or {}).get("whatsapp_phone_number_id")
+        or settings.meta_phone_number_id
+    )
 
     try:
         await wa.send_read_receipt(phone_id, state["whatsapp_message_id"])
@@ -162,11 +171,17 @@ async def context_retriever_node(state: AgentState) -> AgentState:
 
     # RAG — make sure the in-memory index is built (Render free tier loses it on sleep/restart;
     # without this, the request that wakes the service would query an empty index).
-    await ensure_index_ready()
-    state["rag_chunks"] = search_knowledge_base(
-        query=state["inbound_text"],
-        tenant_id=state["tenant_id"],
-    )
+    # A RAG outage must NEVER silence the bot: on any failure here, answer from the
+    # system prompt + catalog only, exactly like the "no relevant knowledge" path.
+    try:
+        await ensure_index_ready()
+        state["rag_chunks"] = search_knowledge_base(
+            query=state["inbound_text"],
+            tenant_id=state["tenant_id"],
+        )
+    except Exception as e:
+        logger.warning(f"RAG unavailable for this turn ({e}) — answering without knowledge base")
+        state["rag_chunks"] = []
 
     # --- Visible flow logging ---
     logger.info(f"[INBOUND] ({tenant['name']}) customer said: {state['inbound_text']!r}")
@@ -373,7 +388,7 @@ async def _media_kind(url: str) -> str:
 
 async def llm_reasoning_node(state: AgentState) -> AgentState:
     """
-    Primary reasoning via Groq (llama-3.3-70b) with tool calling.
+    Primary reasoning via Groq (openai/gpt-oss-120b) with tool calling.
     Tools: get_media, search_catalog, search_knowledge, escalate_to_human.
     """
     if state.get("error"):
@@ -425,97 +440,106 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
     final_reply = msg.content
     media_url = media_type = media_filename = None
 
-    if msg.tool_calls:
-        # Files already sent earlier in this conversation (to avoid re-sending)
-        already_sent = {
-            m.get("media_url")
-            for m in (state.get("chat_history") or [])
-            if m.get("direction") == "OUTBOUND" and m.get("media_url")
-        }
+    # Tool-calling must never kill the whole turn: any failure here falls back
+    # to the plain text reply generated above.
+    try:
+        if msg.tool_calls:
+            # Files already sent earlier in this conversation (to avoid re-sending)
+            already_sent = {
+                m.get("media_url")
+                for m in (state.get("chat_history") or [])
+                if m.get("direction") == "OUTBOUND" and m.get("media_url")
+            }
 
-        # Record the assistant's tool-call turn, then a tool result per call
-        messages.append({
-            "role": "assistant", "content": msg.content or "",
-            "tool_calls": [
-                {"id": tc.id, "type": "function",
-                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                for tc in msg.tool_calls
-            ],
-        })
-
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except Exception:
-                args = {}
-            result = {}
-
-            if name == "get_media":
-                keyword = (args.get("keyword") or "").lower()
-                logger.info(f"[TOOL] get_media({keyword!r}) -> MongoDB media_library")
-                matched = None
-                for key, url in (tenant.get("media_library") or {}).items():
-                    if keyword in key.lower() or key.lower() in keyword:
-                        media_url, matched = url, key
-                        media_type = await _media_kind(url)
-                        if media_type == "DOCUMENT":
-                            media_filename = f"{key.title().replace(' ', '_')}.pdf"
-                        logger.info(f"[MEDIA] matched {key!r} -> {media_type}: {url}")
-                        break
-                result = ({"status": "sent", "item": matched, "type": media_type}
-                          if matched else {"status": "not_found", "note": "No such file; offer the catalog instead."})
-
-            elif name == "search_catalog":
-                desc = args.get("description") or ""
-                logger.info(f"[TOOL] search_catalog({desc!r}) -> Chroma catalog (image+data)")
-                item = search_catalog(desc, state["tenant_id"])
-                if item and item.get("image_url"):
-                    if item["image_url"] in already_sent:
-                        # Already shown this exact piece — acknowledge, don't resend, offer catalog
-                        logger.info(f"[CATALOG] {item['name']!r} already shown -> acknowledge + offer catalog")
-                        result = {
-                            "found": True, "already_shown": True, "name": item["name"],
-                            "note": (f"You ALREADY showed the {item['name']} earlier in this chat. Do NOT resend the image. "
-                                     f"Tell the customer that, as you showed them, the {item['name']} is the piece you have "
-                                     "in that style, then warmly offer the full *catalog* to explore the complete range."),
-                        }
-                    else:
-                        media_url = item["image_url"]
-                        media_type = await _media_kind(media_url)
-                        if media_type == "DOCUMENT":
-                            media_filename = f"{item['name'].replace(' ', '_')}.pdf"
-                        logger.info(f"[CATALOG] matched {item['name']!r} -> {media_url}")
-                        result = {"found": True, "name": item["name"], "price": item["price"], "details": item["details"]}
-                else:
-                    logger.info("[CATALOG] no match")
-                    result = {"found": False, "note": "No matching product; offer the full catalog or ask for detail."}
-
-            elif name == "search_knowledge":
-                q = args.get("query") or ""
-                extra = search_knowledge_base(q, state["tenant_id"])
-                existing = state.get("rag_chunks") or []
-                state["rag_chunks"] = existing + [c for c in extra if c not in existing]
-                result = {"results": extra[:3] if extra else "no additional info found"}
-
-            elif name == "escalate_to_human":
-                logger.info("[TOOL] escalate_to_human -> NEEDS_HUMAN")
-                state["session_status"] = "NEEDS_HUMAN"
-                result = {"status": "escalated"}
-
+            # Record the assistant's tool-call turn, then a tool result per call
             messages.append({
-                "role": "tool", "tool_call_id": tc.id, "name": name,
-                "content": json.dumps(result),
+                "role": "assistant", "content": msg.content or "",
+                "tool_calls": [
+                    {"id": tc.id, "type": "function",
+                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                    for tc in msg.tool_calls
+                ],
             })
 
-        # Second call: let the model write the natural reply using tool results
-        try:
-            resp2 = await _groq_create(
-                groq, model=settings.groq_model, messages=messages, temperature=0.5, max_tokens=400,
-            )
-            final_reply = resp2.choices[0].message.content or final_reply
-        except Exception as e:
-            logger.warning(f"Groq follow-up failed: {e}")
+            for tc in msg.tool_calls:
+                name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except Exception:
+                    args = {}
+                result = {}
+
+                if name == "get_media":
+                    keyword = (args.get("keyword") or "").lower()
+                    logger.info(f"[TOOL] get_media({keyword!r}) -> MongoDB media_library")
+                    matched = None
+                    for key, url in (tenant.get("media_library") or {}).items():
+                        if keyword in key.lower() or key.lower() in keyword:
+                            media_url, matched = url, key
+                            media_type = await _media_kind(url)
+                            if media_type == "DOCUMENT":
+                                media_filename = f"{key.title().replace(' ', '_')}.pdf"
+                            logger.info(f"[MEDIA] matched {key!r} -> {media_type}: {url}")
+                            break
+                    result = ({"status": "sent", "item": matched, "type": media_type}
+                              if matched else {"status": "not_found", "note": "No such file; offer the catalog instead."})
+
+                elif name == "search_catalog":
+                    desc = args.get("description") or ""
+                    logger.info(f"[TOOL] search_catalog({desc!r}) -> Chroma catalog (image+data)")
+                    item = search_catalog(desc, state["tenant_id"])
+                    if item and item.get("image_url"):
+                        if item["image_url"] in already_sent:
+                            # Already shown this exact piece — acknowledge, don't resend, offer catalog
+                            logger.info(f"[CATALOG] {item['name']!r} already shown -> acknowledge + offer catalog")
+                            result = {
+                                "found": True, "already_shown": True, "name": item["name"],
+                                "note": (f"You ALREADY showed the {item['name']} earlier in this chat. Do NOT resend the image. "
+                                         f"Tell the customer that, as you showed them, the {item['name']} is the piece you have "
+                                         "in that style, then warmly offer the full *catalog* to explore the complete range."),
+                            }
+                        else:
+                            media_url = item["image_url"]
+                            media_type = await _media_kind(media_url)
+                            if media_type == "DOCUMENT":
+                                media_filename = f"{item['name'].replace(' ', '_')}.pdf"
+                            logger.info(f"[CATALOG] matched {item['name']!r} -> {media_url}")
+                            result = {"found": True, "name": item["name"], "price": item["price"], "details": item["details"]}
+                    else:
+                        logger.info("[CATALOG] no match")
+                        result = {"found": False, "note": "No matching product; offer the full catalog or ask for detail."}
+
+                elif name == "search_knowledge":
+                    q = args.get("query") or ""
+                    extra = search_knowledge_base(q, state["tenant_id"])
+                    existing = state.get("rag_chunks") or []
+                    state["rag_chunks"] = existing + [c for c in extra if c not in existing]
+                    result = {"results": extra[:3] if extra else "no additional info found"}
+
+                elif name == "escalate_to_human":
+                    logger.info("[TOOL] escalate_to_human -> NEEDS_HUMAN")
+                    state["session_status"] = "NEEDS_HUMAN"
+                    result = {"status": "escalated"}
+
+                messages.append({
+                    "role": "tool", "tool_call_id": tc.id, "name": name,
+                    "content": json.dumps(result),
+                })
+
+            # Second call: let the model write the natural reply using tool results
+            try:
+                resp2 = await _groq_create(
+                    groq, model=settings.groq_model, messages=messages, temperature=0.5, max_tokens=400,
+                )
+                final_reply = resp2.choices[0].message.content or final_reply
+            except Exception as e:
+                logger.warning(f"Groq follow-up failed: {e}")
+
+    except Exception as e:
+        logger.warning(f"Tool-calling block failed ({e}) — sending text reply only")
+        state["media_to_send"] = None
+        state["media_type"] = None
+        state["media_filename"] = None
 
     # Fallbacks
     if not final_reply:
@@ -573,7 +597,13 @@ async def dispatcher_node(state: AgentState) -> AgentState:
     Updates session status.
     Typing indicator auto-stops when a message is sent.
     """
-    phone_id = state["tenant_config"]["whatsapp_phone_number_id"]
+    # Same live-ID preference as acknowledge_node: send via the number Meta
+    # delivered this conversation to, not the possibly-stale stored copy.
+    phone_id = (
+        state.get("whatsapp_phone_number_id")
+        or (state.get("tenant_config") or {}).get("whatsapp_phone_number_id")
+        or settings.meta_phone_number_id
+    )
     to = state["customer_phone"]
     db = get_db()
 
