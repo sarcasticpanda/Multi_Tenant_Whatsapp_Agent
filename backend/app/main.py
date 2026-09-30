@@ -12,6 +12,7 @@ from app.api.webhooks import router as webhook_router
 from app.api.files import router as files_router
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router, require_admin
+from app.legal import router as legal_router
 from app.db.mongodb import connect_mongodb, close_mongodb
 from app.db.seed import seed_tenants_if_empty
 from app.db.seed_catalog import seed_catalog_if_empty
@@ -72,6 +73,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(webhook_router)
+# Public legal pages (no auth): Meta requires a reachable privacy policy URL.
+app.include_router(legal_router)
 # Dashboard APIs carry chat data + can send WhatsApp messages — require admin token.
 # (Frontend already attaches Authorization: Bearer on every call after login.)
 app.include_router(dashboard_router, dependencies=[Depends(require_admin)])
