@@ -7,6 +7,12 @@ class AgentState(TypedDict):
     customer_phone: str
     session_id: str
     whatsapp_message_id: str
+    # Live sending-number ID from the inbound webhook's metadata. This is the
+    # authoritative ID Meta expects on outbound calls for this conversation —
+    # always prefer it over any stored copy (stored tenant IDs can go stale when
+    # the WhatsApp number is re-created, which silently breaks read receipts,
+    # typing indicators and replies with Meta 400s).
+    whatsapp_phone_number_id: Optional[str]
     inbound_text: str
     inbound_media_id: Optional[str]       # Meta media_id for user-sent image
     inbound_media_type: Optional[str]     # "image", "document", etc.
