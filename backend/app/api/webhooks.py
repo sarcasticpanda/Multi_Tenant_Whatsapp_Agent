@@ -292,6 +292,10 @@ async def _run_agent(message_data: dict, tenant_id: str, session_id: str):
             "customer_phone": message_data["customer_phone"],
             "session_id": session_id,
             "whatsapp_message_id": message_data["message_id"],
+            # Pass the live phone_number_id from the webhook through, so the
+            # agent always sends receipts/typing/replies via the number Meta
+            # actually delivered this message to (see AgentState docs).
+            "whatsapp_phone_number_id": message_data.get("phone_number_id"),
             "inbound_text": message_data["text"] or "(no text)",
             "inbound_media_id": message_data.get("media_id"),
             "inbound_media_type": message_data.get("media_type"),
